@@ -36,6 +36,7 @@ MAX_LOG_LINES = 100
 is_connected = False
 message_queue_count = 0
 interface = None
+local_radio_name = ""  # Local radio name (owner name or long name)
 
 HTML_TEMPLATE = """
 <!doctype html>
@@ -108,6 +109,41 @@ def add_security_headers(response):
 def timestamp():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+def get_local_radio_name(interface):
+    """Get the local radio name (owner name or long name)"""
+    try:
+        if not interface:
+            return ""
+        
+        # Try to get owner name first (preferred)
+        try:
+            my_user = interface.getMyUser()
+            if my_user and hasattr(my_user, 'longName') and my_user.longName:
+                return my_user.longName
+        except Exception:
+            pass
+        
+        # Try to get long name from node info
+        try:
+            my_node_info = interface.getMyNodeInfo()
+            if my_node_info and hasattr(my_node_info, 'user') and my_node_info.user:
+                if hasattr(my_node_info.user, 'longName') and my_node_info.user.longName:
+                    return my_node_info.user.longName
+        except Exception:
+            pass
+        
+        # Try getLongName method directly
+        try:
+            long_name = interface.getLongName()
+            if long_name:
+                return long_name
+        except Exception:
+            pass
+        
+        return ""
+    except Exception:
+        return ""
+
 def send_discord(msg: str):
     """Send logs to Discord webhook"""
     if not DISCORD_WEBHOOK_URL:
@@ -129,12 +165,14 @@ def log_console(msg, color="white", bold=False):
     }
     c = colors.get(color, WHITE)
     style = BOLD if bold else ""
-    line = f"{style}{c}[{timestamp()}]{RESET} {msg}"
+    radio_part = f"[{local_radio_name}] " if local_radio_name else ""
+    line = f"{style}{c}[{timestamp()}] {radio_part}{RESET}{msg}"
     print(line)
 
 def log_discord(msg):
     """Log message to Discord only"""
-    send_discord(f"[{timestamp()}] {msg}")
+    radio_part = f"[{local_radio_name}] " if local_radio_name else ""
+    send_discord(f"[{timestamp()}] {radio_part}{msg}")
 
 def log_console_and_discord(msg, color="white", bold=False):
     """Log message to both console and Discord"""
@@ -142,7 +180,8 @@ def log_console_and_discord(msg, color="white", bold=False):
     log_discord(msg)
 
 def log_web(msg, color="white", bold=False):
-    html_msg = f'<div class="log {color}{" bold" if bold else ""}">[{timestamp()}] {msg}</div>'
+    radio_part = f"[{local_radio_name}] " if local_radio_name else ""
+    html_msg = f'<div class="log {color}{" bold" if bold else ""}">[{timestamp()}] {radio_part}{msg}</div>'
     socketio.emit("log_message", html_msg)
 
 # --- Extractors ---
@@ -294,7 +333,7 @@ shutdown_event = threading.Event()
 
 def monitor_connection():
     """Monitor connection and reconnect if needed"""
-    global is_connected, interface, reconnect_thread
+    global is_connected, interface, reconnect_thread, local_radio_name
     
     backoff = 2
     max_backoff = 60
@@ -317,6 +356,22 @@ def monitor_connection():
                     pub.subscribe(on_receive, "meshtastic.receive")
                     is_connected = True
                     backoff = 2  # Reset backoff on successful connection
+                    
+                    # Get the local radio name after successful connection
+                    try:
+                        # Wait a moment for the interface to be fully ready
+                        time.sleep(2)
+                        local_radio_name = get_local_radio_name(interface)
+                        if local_radio_name:
+                            log_console(f"Retrieved local radio name: {local_radio_name}", "cyan")
+                            log_web(f"Retrieved local radio name: {local_radio_name}", "cyan")
+                        else:
+                            log_console("Could not retrieve local radio name", "yellow")
+                            log_web("Could not retrieve local radio name", "yellow")
+                    except Exception as e:
+                        log_console("Failed to retrieve local radio name", "yellow")
+                        log_web("Failed to retrieve local radio name", "yellow")
+                        local_radio_name = ""
                 
                 log_console("Connected to Meshtastic radio", "green", True)
                 log_web("Connected to Meshtastic radio", "green", True)
