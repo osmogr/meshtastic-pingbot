@@ -260,6 +260,33 @@ REPLY_COOLDOWN = 15  # seconds
 
 # --- Packet handler ---
 TRIGGERS = ["ping", "hello", "test"]
+DM_COMMANDS = ["help", "/help", "about", "/about"]
+
+def get_help_response():
+    """Generate help response for DM help commands"""
+    return (
+        f"Meshtastic Pingbot Help:\n\n"
+        f"I respond to these triggers in channels and DMs:\n"
+        f"• {', '.join(TRIGGERS)}\n\n"
+        f"DM-only commands:\n"
+        f"• help, /help - Show this help message\n"
+        f"• about, /about - Show information about this bot\n\n"
+        f"When you send a trigger, I'll respond with connection info including RSSI, SNR, and hop count."
+    )
+
+def get_about_response():
+    """Generate about response for DM about commands"""
+    return (
+        f"Meshtastic Pingbot v1.0\n\n"
+        f"I'm a simple ping-pong bot that helps test Meshtastic network connectivity. "
+        f"Send me '{', '.join(TRIGGERS)}' and I'll respond with your connection quality metrics.\n\n"
+        f"Features:\n"
+        f"• RSSI and SNR reporting\n"
+        f"• Hop count tracking\n"
+        f"• Rate limiting (15s cooldown)\n"
+        f"• Channel and DM support\n\n"
+        f"Built for the Meshtastic mesh networking community."
+    )
 
 def on_receive(packet=None, interface=None, **kwargs):
     global message_queue_count, is_connected
@@ -284,6 +311,44 @@ def on_receive(packet=None, interface=None, **kwargs):
         log_console(f"Incoming from {sender} via {message_origin}: '{msg}'", "cyan", True)
         log_web(f"Incoming from {sender} via {message_origin}: '{msg}'", "cyan", True)
 
+        # Handle DM-only commands (help and about)
+        if message_origin == "DM" and msg in DM_COMMANDS:
+            now = time.time()
+            if sender_id in last_reply_time and (now - last_reply_time[sender_id]) < REPLY_COOLDOWN:
+                log_console(f"Rate-limited reply to {sender}", "yellow")
+                log_web(f"Rate-limited reply to {sender}", "yellow")
+                return
+
+            last_reply_time[sender_id] = now
+            
+            # Generate appropriate response based on command
+            if msg in ["help", "/help"]:
+                reply = get_help_response()
+            elif msg in ["about", "/about"]:
+                reply = get_about_response()
+            
+            # Send reply with connection error handling
+            try:
+                message_queue_count += 1
+                if interface and is_connected:
+                    interface.sendText(reply, destinationId=packet["fromId"])
+                    message_queue_count -= 1
+                else:
+                    log_console("Cannot send reply: not connected", "red")
+                    log_web("Cannot send reply: not connected", "red")
+                    # Keep message in queue for potential retry
+            except Exception as e:
+                log_console("Failed to send reply: connection error", "red")
+                log_web("Failed to send reply: connection error", "red")
+                # Connection may have been lost
+                is_connected = False
+                
+            console = f"DM Help/About -> {sender}: {msg} command"
+            log_console(console, "green")
+            log_web(console, "green")
+            return
+
+        # Handle existing triggers (ping, hello, test) - work in both channels and DMs
         if msg in TRIGGERS:
             now = time.time()
             if sender_id in last_reply_time and (now - last_reply_time[sender_id]) < REPLY_COOLDOWN:
