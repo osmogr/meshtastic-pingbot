@@ -164,6 +164,18 @@ def get_sender_name(packet):
         return user.get("longName") or user.get("shortName")
     return packet.get("fromId", "Unknown")
 
+def get_message_origin(packet):
+    """Determine if message is from channel or direct message"""
+    to_id = packet.get("toId", "")
+    
+    # Check if it's a broadcast/channel message
+    if (to_id == meshtastic.BROADCAST_ADDR or 
+        to_id == meshtastic.BROADCAST_NUM or
+        str(to_id) == str(meshtastic.BROADCAST_NUM)):
+        return "Channel"
+    else:
+        return "DM"
+
 # --- Format helpers (ANSI & HTML colors) ---
 def ansi_rssi(rssi):
     try:
@@ -224,13 +236,14 @@ def on_receive(packet=None, interface=None, **kwargs):
         
         sender = get_sender_name(packet)
         sender_id = packet.get("fromId", sender)
+        message_origin = get_message_origin(packet)
         
         # Sanitize sender name for logging
         if sender and len(sender) > 50:
             sender = sender[:47] + "..."
 
-        log_console(f"Incoming from {sender}: '{msg}'", "cyan", True)
-        log_web(f"Incoming from {sender}: '{msg}'", "cyan", True)
+        log_console(f"Incoming from {sender} via {message_origin}: '{msg}'", "cyan", True)
+        log_web(f"Incoming from {sender} via {message_origin}: '{msg}'", "cyan", True)
 
         if msg in TRIGGERS:
             now = time.time()
