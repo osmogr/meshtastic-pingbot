@@ -258,34 +258,117 @@ def html_hops(hop_count, hop_start):
 last_reply_time = {}
 REPLY_COOLDOWN = 15  # seconds
 
+# --- Message splitting ---
+MAX_MESSAGE_LENGTH = 200  # Meshtastic practical message limit
+
+def split_message(text, max_length=MAX_MESSAGE_LENGTH):
+    """
+    Split a message into multiple parts, each under the maximum length.
+    Try to break at natural boundaries (sentences, then words) to maximize readability.
+    """
+    if len(text) <= max_length:
+        return [text]
+    
+    messages = []
+    remaining = text.strip()
+    
+    while remaining:
+        if len(remaining) <= max_length:
+            messages.append(remaining)
+            break
+        
+        # Find the best split point within max_length
+        split_point = max_length
+        
+        # Try to split at sentence boundaries first (. ! ?)
+        for i in range(max_length - 1, max_length // 2, -1):
+            if remaining[i] in '.!?':
+                # Check if there's space after the punctuation
+                if i + 1 < len(remaining) and remaining[i + 1] == ' ':
+                    split_point = i + 1
+                    break
+        
+        # If no sentence boundary found, try to split at word boundaries
+        if split_point == max_length:
+            for i in range(max_length - 1, max_length // 2, -1):
+                if remaining[i] == ' ':
+                    split_point = i
+                    break
+        
+        # If no good split point found, just split at max_length
+        if split_point == max_length and len(remaining) > max_length:
+            # Find last space before max_length to avoid breaking words
+            for i in range(max_length - 1, 0, -1):
+                if remaining[i] == ' ':
+                    split_point = i
+                    break
+        
+        # Extract the message part and add to list
+        message_part = remaining[:split_point].rstrip()
+        if message_part:
+            messages.append(message_part)
+        
+        # Update remaining text
+        remaining = remaining[split_point:].lstrip()
+    
+    return messages
+
+def send_multiple_messages(interface, messages, destination_id):
+    """
+    Send multiple messages in sequence with proper error handling.
+    Returns True if all messages were sent successfully, False otherwise.
+    """
+    global message_queue_count, is_connected
+    
+    if not interface or not is_connected:
+        log_console("Cannot send messages: not connected", "red")
+        log_web("Cannot send messages: not connected", "red")
+        return False
+    
+    success_count = 0
+    total_messages = len(messages)
+    
+    for i, message in enumerate(messages, 1):
+        try:
+            message_queue_count += 1
+            interface.sendText(message, destinationId=destination_id)
+            message_queue_count -= 1
+            success_count += 1
+            
+            # Small delay between messages to avoid overwhelming the radio
+            if i < total_messages:
+                time.sleep(0.5)
+                
+        except Exception as e:
+            log_console(f"Failed to send message {i}/{total_messages}: connection error", "red")
+            log_web(f"Failed to send message {i}/{total_messages}: connection error", "red")
+            is_connected = False
+            return False
+    
+    return success_count == total_messages
+
 # --- Packet handler ---
 TRIGGERS = ["ping", "hello", "test"]
 DM_COMMANDS = ["help", "/help", "about", "/about"]
 
 def get_help_response():
-    """Generate help response for DM help commands"""
+    """Generate help response for DM help commands (optimized for message splitting)"""
     return (
         f"Meshtastic Pingbot Help:\n\n"
-        f"I respond to these triggers in channels and DMs:\n"
-        f"• {', '.join(TRIGGERS)}\n\n"
-        f"DM-only commands:\n"
-        f"• help, /help - Show this help message\n"
-        f"• about, /about - Show information about this bot\n\n"
+        f"I respond to these triggers in channels and DMs: {', '.join(TRIGGERS)}\n\n"
+        f"DM-only commands: help, /help - Show this help message. "
+        f"about, /about - Show information about this bot.\n\n"
         f"When you send a trigger, I'll respond with connection info including RSSI, SNR, and hop count."
     )
 
 def get_about_response():
-    """Generate about response for DM about commands"""
+    """Generate about response for DM about commands (optimized for message splitting)"""
     return (
         f"Meshtastic Pingbot v1.0\n\n"
         f"I'm a simple ping-pong bot that helps test Meshtastic network connectivity. "
-        f"Send me '{', '.join(TRIGGERS)}' and I'll respond with your connection quality metrics.\n\n"
-        f"Features:\n"
-        f"• RSSI and SNR reporting\n"
-        f"• Hop count tracking\n"
-        f"• Rate limiting (15s cooldown)\n"
-        f"• Channel and DM support\n\n"
-        f"Built for the Meshtastic mesh networking community."
+        f"Send me '{', '.join(TRIGGERS)}' and I'll respond with your connection quality metrics. "
+        f"Features: RSSI and SNR reporting, Hop count tracking, Rate limiting (15s cooldown), "
+        f"Channel and DM support. Built for the Meshtastic mesh networking community."
     )
 
 def on_receive(packet=None, interface=None, **kwargs):
@@ -327,25 +410,20 @@ def on_receive(packet=None, interface=None, **kwargs):
             elif msg in ["about", "/about"]:
                 reply = get_about_response()
             
+            # Split the reply into multiple messages if needed
+            reply_messages = split_message(reply)
+            
             # Send reply with connection error handling
-            try:
-                message_queue_count += 1
-                if interface and is_connected:
-                    interface.sendText(reply, destinationId=packet["fromId"])
-                    message_queue_count -= 1
-                else:
-                    log_console("Cannot send reply: not connected", "red")
-                    log_web("Cannot send reply: not connected", "red")
-                    # Keep message in queue for potential retry
-            except Exception as e:
-                log_console("Failed to send reply: connection error", "red")
-                log_web("Failed to send reply: connection error", "red")
-                # Connection may have been lost
-                is_connected = False
-                
-            console = f"DM Help/About -> {sender}: {msg} command"
-            log_console(console, "green")
-            log_web(console, "green")
+            success = send_multiple_messages(interface, reply_messages, packet["fromId"])
+            
+            if success:
+                console = f"DM Help/About -> {sender}: {msg} command ({len(reply_messages)} message{'s' if len(reply_messages) > 1 else ''})"
+                log_console(console, "green")
+                log_web(console, "green")
+            else:
+                console = f"Failed to send DM Help/About -> {sender}: {msg} command"
+                log_console(console, "red")
+                log_web(console, "red")
             return
 
         # Handle existing triggers (ping, hello, test) - work in both channels and DMs
@@ -366,25 +444,20 @@ def on_receive(packet=None, interface=None, **kwargs):
             if hop_count is not None:
                 reply += f" Hops: {hop_count}/{hop_start}"
             
+            # Split the reply into multiple messages if needed (though ping responses are usually short)
+            reply_messages = split_message(reply)
+            
             # Send reply with connection error handling
-            try:
-                message_queue_count += 1
-                if interface and is_connected:
-                    interface.sendText(reply, destinationId=packet["fromId"])
-                    message_queue_count -= 1
-                else:
-                    log_console("Cannot send reply: not connected", "red")
-                    log_web("Cannot send reply: not connected", "red")
-                    # Keep message in queue for potential retry
-            except Exception as e:
-                log_console("Failed to send reply: connection error", "red")
-                log_web("Failed to send reply: connection error", "red")
-                # Connection may have been lost
-                is_connected = False
-                
-            console = f"Reply -> {sender}: {reply}"
-            log_console(console, "green")
-            log_web(console, "green")
+            success = send_multiple_messages(interface, reply_messages, packet["fromId"])
+            
+            if success:
+                console = f"Reply -> {sender}: {reply}"
+                log_console(console, "green")
+                log_web(console, "green")
+            else:
+                console = f"Failed to send reply -> {sender}"
+                log_console(console, "red")
+                log_web(console, "red")
             
     except Exception as e:
         # Log error without exposing sensitive details
