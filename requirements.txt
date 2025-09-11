@@ -1,0 +1,5 @@
+meshtastic>=2.0.0
+flask>=2.0.0
+flask-socketio>=5.0.0
+requests>=2.25.0
+pubsub>=0.1.2

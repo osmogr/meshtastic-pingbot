@@ -3,8 +3,10 @@ import meshtastic.tcp_interface
 import datetime
 import time
 import requests
+import threading
+import os
 from pubsub import pub
-from flask import Flask, render_template_string
+from flask import Flask, render_template_string, request
 from flask_socketio import SocketIO
 
 # --- ANSI color codes (console only) ---
@@ -19,16 +21,21 @@ BLUE = "\033[94m"
 WHITE = "\033[97m"
 
 # --- Meshtastic device ---
-DEVICE_IP = "192.168.1.50"
-DEVICE_PORT = 4403  # Meshtastic TCP port (default, auto-used)
+DEVICE_IP = os.environ.get("MESHTASTIC_IP", "192.168.1.50")
+DEVICE_PORT = int(os.environ.get("MESHTASTIC_PORT", "4403"))
 
 # --- Discord webhook ---
-DISCORD_WEBHOOK_URL = ""
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
 # --- Flask / SocketIO ---
 app = Flask(__name__)
 socketio = SocketIO(app, async_mode="threading")
 MAX_LOG_LINES = 100
+
+# --- Connection and health tracking ---
+is_connected = False
+message_queue_count = 0
+interface = None
 
 HTML_TEMPLATE = """
 <!doctype html>
@@ -74,6 +81,29 @@ HTML_TEMPLATE = """
 def index():
     return render_template_string(HTML_TEMPLATE, max_lines=MAX_LOG_LINES)
 
+@app.route("/health")
+def health():
+    """Health check endpoint"""
+    from flask import jsonify
+    
+    # Add security headers
+    response = jsonify({
+        "connected": is_connected,
+        "queued": message_queue_count
+    })
+    response.headers['Content-Type'] = 'application/json'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    return response
+
+@app.after_request
+def add_security_headers(response):
+    """Add basic security headers"""
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    return response
+
 # --- Utilities ---
 def timestamp():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -83,11 +113,16 @@ def send_discord(msg: str):
     if not DISCORD_WEBHOOK_URL:
         return
     try:
+        # Basic input validation
+        if len(msg) > 2000:  # Discord message limit
+            msg = msg[:1997] + "..."
         requests.post(DISCORD_WEBHOOK_URL, json={"content": msg}, timeout=5)
     except Exception as e:
-        print(f"Discord webhook error: {e}")
+        # Don't log the full error to avoid leaking sensitive information
+        print(f"Discord webhook error: Connection failed")
 
 def log_console(msg, color="white", bold=False):
+    """Log message to console only"""
     colors = {
         "cyan": CYAN, "green": GREEN, "yellow": YELLOW,
         "red": RED, "magenta": MAGENTA, "blue": BLUE, "white": WHITE,
@@ -96,7 +131,15 @@ def log_console(msg, color="white", bold=False):
     style = BOLD if bold else ""
     line = f"{style}{c}[{timestamp()}]{RESET} {msg}"
     print(line)
+
+def log_discord(msg):
+    """Log message to Discord only"""
     send_discord(f"[{timestamp()}] {msg}")
+
+def log_console_and_discord(msg, color="white", bold=False):
+    """Log message to both console and Discord"""
+    log_console(msg, color, bold)
+    log_discord(msg)
 
 def log_web(msg, color="white", bold=False):
     html_msg = f'<div class="log {color}{" bold" if bold else ""}">[{timestamp()}] {msg}</div>'
@@ -168,60 +211,159 @@ REPLY_COOLDOWN = 15  # seconds
 TRIGGERS = ["ping", "hello", "test"]
 
 def on_receive(packet=None, interface=None, **kwargs):
+    global message_queue_count, is_connected
+    
     if not packet or "decoded" not in packet or "text" not in packet["decoded"]:
         return
-    msg = packet["decoded"]["text"].strip().lower()
-    sender = get_sender_name(packet)
-    sender_id = packet.get("fromId", sender)
-
-    log_console(f"Incoming from {sender}: '{msg}'", "cyan", True)
-    log_web(f"Incoming from {sender}: '{msg}'", "cyan", True)
-
-    if msg in TRIGGERS:
-        now = time.time()
-        if sender_id in last_reply_time and (now - last_reply_time[sender_id]) < REPLY_COOLDOWN:
-            log_console(f"Rate-limited reply to {sender}", "yellow")
-            log_web(f"Rate-limited reply to {sender}", "yellow")
-            send_discord(f"[{timestamp()}] Rate-limited reply to {sender}")
+    
+    # Basic input validation
+    try:
+        msg = packet["decoded"]["text"].strip().lower()
+        if len(msg) > 200:  # Reasonable limit for Meshtastic messages
             return
+        
+        sender = get_sender_name(packet)
+        sender_id = packet.get("fromId", sender)
+        
+        # Sanitize sender name for logging
+        if sender and len(sender) > 50:
+            sender = sender[:47] + "..."
 
-        last_reply_time[sender_id] = now
-        rssi, snr = extract_rssi_snr(packet)
-        hop_start = packet.get("hopStart", None)
-        hop_limit = packet.get("hopLimit", None)
-        hop_count = hop_start - hop_limit if hop_start and hop_limit else None
+        log_console(f"Incoming from {sender}: '{msg}'", "cyan", True)
+        log_web(f"Incoming from {sender}: '{msg}'", "cyan", True)
 
-        reply = f"pong ({timestamp()}) RSSI: {rssi} SNR: {snr}"
-        if hop_count is not None:
-            reply += f" Hops: {hop_count}/{hop_start}"
-        interface.sendText(reply, destinationId=packet["fromId"])
+        if msg in TRIGGERS:
+            now = time.time()
+            if sender_id in last_reply_time and (now - last_reply_time[sender_id]) < REPLY_COOLDOWN:
+                log_console(f"Rate-limited reply to {sender}", "yellow")
+                log_web(f"Rate-limited reply to {sender}", "yellow")
+                return
 
-        console = f"Reply -> {sender}: {reply}"
-        log_console(console, "green")
-        log_web(console, "green")
-#        send_discord(f"[{timestamp()}] {console}")
-#    else:
-#        log_console(f"Ignored message: '{msg}'", "blue")
-#        log_web(f"Ignored message: '{msg}'", "blue")
+            last_reply_time[sender_id] = now
+            rssi, snr = extract_rssi_snr(packet)
+            hop_start = packet.get("hopStart", None)
+            hop_limit = packet.get("hopLimit", None)
+            hop_count = hop_start - hop_limit if hop_start and hop_limit else None
+
+            reply = f"pong ({timestamp()}) RSSI: {rssi} SNR: {snr}"
+            if hop_count is not None:
+                reply += f" Hops: {hop_count}/{hop_start}"
+            
+            # Send reply with connection error handling
+            try:
+                message_queue_count += 1
+                if interface and is_connected:
+                    interface.sendText(reply, destinationId=packet["fromId"])
+                    message_queue_count -= 1
+                else:
+                    log_console("Cannot send reply: not connected", "red")
+                    log_web("Cannot send reply: not connected", "red")
+                    # Keep message in queue for potential retry
+            except Exception as e:
+                log_console("Failed to send reply: connection error", "red")
+                log_web("Failed to send reply: connection error", "red")
+                # Connection may have been lost
+                is_connected = False
+                
+            console = f"Reply -> {sender}: {reply}"
+            log_console(console, "green")
+            log_web(console, "green")
+            
+    except Exception as e:
+        # Log error without exposing sensitive details
+        log_console("Error processing incoming message", "red")
+        log_web("Error processing incoming message", "red")
 
 # --- Connection handling ---
-def connect_radio():
+connection_lock = threading.Lock()
+reconnect_thread = None
+shutdown_event = threading.Event()
+
+def monitor_connection():
+    """Monitor connection and reconnect if needed"""
+    global is_connected, interface, reconnect_thread
+    
     backoff = 2
-    while True:
+    max_backoff = 60
+    
+    while not shutdown_event.is_set():
         try:
-            log_console("Attempting connection to radio...", "yellow")
-            iface = meshtastic.tcp_interface.TCPInterface(hostname=DEVICE_IP)
-            pub.subscribe(on_receive, "meshtastic.receive")
-            log_console("Connected to Meshtastic radio", "green", True)
-            return iface
+            if not is_connected:
+                log_console("Attempting connection to radio...", "yellow")
+                log_web("Attempting connection to radio...", "yellow")
+                
+                with connection_lock:
+                    if interface:
+                        try:
+                            interface.close()
+                        except:
+                            pass
+                        interface = None
+                    
+                    interface = meshtastic.tcp_interface.TCPInterface(hostname=DEVICE_IP)
+                    pub.subscribe(on_receive, "meshtastic.receive")
+                    is_connected = True
+                    backoff = 2  # Reset backoff on successful connection
+                
+                log_console("Connected to Meshtastic radio", "green", True)
+                log_web("Connected to Meshtastic radio", "green", True)
+                
+            # Check if connection is still alive by attempting to get node info
+            # This is a simple way to detect if the connection has been lost
+            time.sleep(30)  # Check every 30 seconds
+            
         except Exception as e:
-            log_console(f"Connection failed: {e}", "red")
-            time.sleep(backoff)
-            backoff = min(backoff * 2, 60)
+            is_connected = False
+            # Don't expose detailed error information
+            log_console("Connection failed: unable to connect to radio", "red")
+            log_web("Connection failed: unable to connect to radio", "red")
+            
+            if not shutdown_event.is_set():
+                log_console(f"Retrying in {backoff} seconds...", "yellow")
+                log_web(f"Retrying in {backoff} seconds...", "yellow")
+                shutdown_event.wait(backoff)
+                backoff = min(backoff * 2, max_backoff)
+
+def start_connection_monitor():
+    """Start the connection monitoring thread"""
+    global reconnect_thread
+    if reconnect_thread is None or not reconnect_thread.is_alive():
+        reconnect_thread = threading.Thread(target=monitor_connection, daemon=True)
+        reconnect_thread.start()
+
+def connect_radio():
+    """Initialize radio connection with monitoring"""
+    start_connection_monitor()
+    
+    # Wait for initial connection
+    timeout = 60  # 60 seconds timeout for initial connection
+    start_time = time.time()
+    while not is_connected and (time.time() - start_time) < timeout:
+        time.sleep(1)
+    
+    if not is_connected:
+        log_console("Failed to establish initial connection within timeout", "red")
+        raise ConnectionError("Failed to connect to radio")
+    
+    return interface
 
 # --- Main ---
 if __name__ == "__main__":
-    interface = connect_radio()
-    log_console("Starting web server...", "green", True)
-    log_web("Starting web server...", "green", True)
-    socketio.run(app, host="0.0.0.0", port=5000)
+    try:
+        interface = connect_radio()
+        log_console("Starting web server...", "green", True)
+        log_web("Starting web server...", "green", True)
+        socketio.run(app, host="0.0.0.0", port=5000)
+    except KeyboardInterrupt:
+        log_console("Shutting down...", "yellow")
+        shutdown_event.set()
+    except Exception as e:
+        log_console(f"Fatal error: {e}", "red")
+        shutdown_event.set()
+    finally:
+        # Clean shutdown
+        if interface:
+            try:
+                interface.close()
+            except:
+                pass
