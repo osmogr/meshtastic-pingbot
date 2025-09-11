@@ -5,6 +5,15 @@ Meshtastic Pingbot
 
 This pingbot automatically responds to "ping", "hello", and "test" messages with connection information including RSSI, SNR, and hop count.
 
+### Commands
+
+**Triggers (work in channels and DMs):**
+- `ping`, `hello`, `test` - Responds with connection info (RSSI, SNR, hop count)
+
+**DM-Only Commands:**
+- `help`, `/help` - Shows available triggers and commands
+- `about`, `/about` - Shows information about the bot
+
 ### Recent Improvements
 
 - **Separated Logging Functions**: Console and Discord logging are now separate functions (`log_console()`, `log_discord()`, `log_console_and_discord()`)
