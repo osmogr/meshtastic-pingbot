@@ -321,7 +321,7 @@ def send_multiple_messages(interface, messages, destination_id):
     global message_queue_count, is_connected
     
     if not interface or not is_connected:
-        log_console("Cannot send messages: not connected", "red")
+        log_console_and_discord("Cannot send messages: not connected", "red")
         log_web("Cannot send messages: not connected", "red")
         return False
     
@@ -340,7 +340,7 @@ def send_multiple_messages(interface, messages, destination_id):
                 time.sleep(0.5)
                 
         except Exception as e:
-            log_console(f"Failed to send message {i}/{total_messages}: connection error", "red")
+            log_console_and_discord(f"Failed to send message {i}/{total_messages}: connection error", "red")
             log_web(f"Failed to send message {i}/{total_messages}: connection error", "red")
             is_connected = False
             return False
@@ -391,14 +391,14 @@ def on_receive(packet=None, interface=None, **kwargs):
         if sender and len(sender) > 50:
             sender = sender[:47] + "..."
 
-        log_console(f"Incoming from {sender} via {message_origin}: '{msg}'", "cyan", True)
+        log_console_and_discord(f"Incoming from {sender} via {message_origin}: '{msg}'", "cyan", True)
         log_web(f"Incoming from {sender} via {message_origin}: '{msg}'", "cyan", True)
 
         # Handle DM-only commands (help and about)
         if message_origin == "DM" and msg in DM_COMMANDS:
             now = time.time()
             if sender_id in last_reply_time and (now - last_reply_time[sender_id]) < REPLY_COOLDOWN:
-                log_console(f"Rate-limited reply to {sender}", "yellow")
+                log_console_and_discord(f"Rate-limited reply to {sender}", "yellow")
                 log_web(f"Rate-limited reply to {sender}", "yellow")
                 return
 
@@ -418,11 +418,11 @@ def on_receive(packet=None, interface=None, **kwargs):
             
             if success:
                 console = f"DM Help/About -> {sender}: {msg} command ({len(reply_messages)} message{'s' if len(reply_messages) > 1 else ''})"
-                log_console(console, "green")
+                log_console_and_discord(console, "green")
                 log_web(console, "green")
             else:
                 console = f"Failed to send DM Help/About -> {sender}: {msg} command"
-                log_console(console, "red")
+                log_console_and_discord(console, "red")
                 log_web(console, "red")
             return
 
@@ -430,7 +430,7 @@ def on_receive(packet=None, interface=None, **kwargs):
         if msg in TRIGGERS:
             now = time.time()
             if sender_id in last_reply_time and (now - last_reply_time[sender_id]) < REPLY_COOLDOWN:
-                log_console(f"Rate-limited reply to {sender}", "yellow")
+                log_console_and_discord(f"Rate-limited reply to {sender}", "yellow")
                 log_web(f"Rate-limited reply to {sender}", "yellow")
                 return
 
@@ -452,16 +452,16 @@ def on_receive(packet=None, interface=None, **kwargs):
             
             if success:
                 console = f"Reply -> {sender}: {reply}"
-                log_console(console, "green")
+                log_console_and_discord(console, "green")
                 log_web(console, "green")
             else:
                 console = f"Failed to send reply -> {sender}"
-                log_console(console, "red")
+                log_console_and_discord(console, "red")
                 log_web(console, "red")
             
     except Exception as e:
         # Log error without exposing sensitive details
-        log_console("Error processing incoming message", "red")
+        log_console_and_discord("Error processing incoming message", "red")
         log_web("Error processing incoming message", "red")
 
 # --- Connection handling ---
@@ -479,7 +479,7 @@ def monitor_connection():
     while not shutdown_event.is_set():
         try:
             if not is_connected:
-                log_console("Attempting connection to radio...", "yellow")
+                log_console_and_discord("Attempting connection to radio...", "yellow")
                 log_web("Attempting connection to radio...", "yellow")
                 
                 with connection_lock:
@@ -501,17 +501,17 @@ def monitor_connection():
                         time.sleep(2)
                         local_radio_name = get_local_radio_name(interface)
                         if local_radio_name:
-                            log_console(f"Retrieved local radio name: {local_radio_name}", "cyan")
+                            log_console_and_discord(f"Retrieved local radio name: {local_radio_name}", "cyan")
                             log_web(f"Retrieved local radio name: {local_radio_name}", "cyan")
                         else:
-                            log_console("Could not retrieve local radio name", "yellow")
+                            log_console_and_discord("Could not retrieve local radio name", "yellow")
                             log_web("Could not retrieve local radio name", "yellow")
                     except Exception as e:
-                        log_console("Failed to retrieve local radio name", "yellow")
+                        log_console_and_discord("Failed to retrieve local radio name", "yellow")
                         log_web("Failed to retrieve local radio name", "yellow")
                         local_radio_name = ""
                 
-                log_console("Connected to Meshtastic radio", "green", True)
+                log_console_and_discord("Connected to Meshtastic radio", "green", True)
                 log_web("Connected to Meshtastic radio", "green", True)
                 
             # Check if connection is still alive by attempting to get node info
@@ -521,11 +521,11 @@ def monitor_connection():
         except Exception as e:
             is_connected = False
             # Don't expose detailed error information
-            log_console("Connection failed: unable to connect to radio", "red")
+            log_console_and_discord("Connection failed: unable to connect to radio", "red")
             log_web("Connection failed: unable to connect to radio", "red")
             
             if not shutdown_event.is_set():
-                log_console(f"Retrying in {backoff} seconds...", "yellow")
+                log_console_and_discord(f"Retrying in {backoff} seconds...", "yellow")
                 log_web(f"Retrying in {backoff} seconds...", "yellow")
                 shutdown_event.wait(backoff)
                 backoff = min(backoff * 2, max_backoff)
@@ -548,7 +548,7 @@ def connect_radio():
         time.sleep(1)
     
     if not is_connected:
-        log_console("Failed to establish initial connection within timeout", "red")
+        log_console_and_discord("Failed to establish initial connection within timeout", "red")
         raise ConnectionError("Failed to connect to radio")
     
     return interface
