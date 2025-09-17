@@ -22,23 +22,26 @@ This pingbot automatically responds to "ping", "hello", and "test" messages with
 - **Security Enhancements**: Input validation, security headers, and improved error handling
 - **Environment Configuration**: Configure via environment variables
 
+## Install
+- Clone the repo
+- python3 -m venv .venv
+- pip3 install -r requirements.txt
+ 
 ## Configuration
-
 Set these environment variables:
-
-- `MESHTASTIC_IP`: IP address of Meshtastic device (default: "192.168.1.50")
-- `MESHTASTIC_PORT`: TCP port (default: 4403) 
+- `DEVICE_IP`: IP address of Meshtastic device (default: "192.168.1.50")
+- `DEVICE_PORT`: TCP port (default: 4403) 
 - `DISCORD_WEBHOOK_URL`: Discord webhook URL for notifications (optional)
 
 ## API Endpoints
-
 - `GET /`: Web interface showing live logs
 - `GET /health`: Health check returning `{"connected": true/false, "queued": N}`
 
 ## Usage
-
 ```bash
-python3 main.py
+python3 -m venv .venv
+pip3 install -r requirements.txt
+python main.py
 ```
 
 The web interface will be available at http://localhost:5000
