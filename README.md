@@ -39,6 +39,8 @@ Set these environment variables:
 
 ## Usage
 ```bash
+git clone https://github.com/osmogr/meshtastic-pingbot
+cd meshtastic-pingbot
 python3 -m venv .venv
 pip3 install -r requirements.txt
 python main.py
