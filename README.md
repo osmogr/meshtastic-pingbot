@@ -25,6 +25,7 @@ This pingbot automatically responds to "ping", "hello", and "test" messages with
 ## Install
 - Clone the repo
 - python3 -m venv .venv
+- source venv/bin/activate
 - pip3 install -r requirements.txt
  
 ## Configuration
@@ -42,6 +43,7 @@ Set these environment variables:
 git clone https://github.com/osmogr/meshtastic-pingbot
 cd meshtastic-pingbot
 python3 -m venv .venv
+source venv/bin/activate
 pip3 install -r requirements.txt
 python main.py
 ```
