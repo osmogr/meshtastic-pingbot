@@ -339,6 +339,11 @@ def send_multiple_messages(interface, messages, destination_id):
             if i < total_messages:
                 time.sleep(0.5)
                 
+        except BrokenPipeError as e:
+            log_console_and_discord(f"Failed to send message {i}/{total_messages}: broken pipe (connection lost)", "red")
+            log_web(f"Failed to send message {i}/{total_messages}: broken pipe (connection lost)", "red")
+            is_connected = False
+            return False
         except Exception as e:
             log_console_and_discord(f"Failed to send message {i}/{total_messages}: connection error", "red")
             log_web(f"Failed to send message {i}/{total_messages}: connection error", "red")
@@ -486,7 +491,11 @@ def monitor_connection():
                     if interface:
                         try:
                             interface.close()
-                        except:
+                        except BrokenPipeError:
+                            # Expected when connection is already broken
+                            pass
+                        except Exception:
+                            # Ignore other errors during cleanup
                             pass
                         interface = None
                     
@@ -514,10 +523,33 @@ def monitor_connection():
                 log_console_and_discord("Connected to Meshtastic radio", "green", True)
                 log_web("Connected to Meshtastic radio", "green", True)
                 
-            # Check if connection is still alive by attempting to get node info
-            # This is a simple way to detect if the connection has been lost
-            time.sleep(30)  # Check every 30 seconds
+            # Check if connection is still alive by attempting a simple operation
+            # This helps detect broken pipes and connection issues early
+            try:
+                # Try to access the interface to check if it's still responsive
+                if interface and hasattr(interface, 'getMyNodeInfo'):
+                    # This is a lightweight operation to test connection health
+                    interface.getMyNodeInfo()
+                time.sleep(30)  # Check every 30 seconds
+            except BrokenPipeError:
+                log_console_and_discord("Connection health check failed: broken pipe detected", "red")
+                log_web("Connection health check failed: broken pipe detected", "red")
+                is_connected = False
+                continue
+            except Exception:
+                # Don't fail on health check errors, just continue monitoring
+                time.sleep(30)
             
+        except BrokenPipeError as e:
+            is_connected = False
+            log_console_and_discord("Connection failed: broken pipe (radio disconnected)", "red")
+            log_web("Connection failed: broken pipe (radio disconnected)", "red")
+            
+            if not shutdown_event.is_set():
+                log_console_and_discord(f"Retrying in {backoff} seconds...", "yellow")
+                log_web(f"Retrying in {backoff} seconds...", "yellow")
+                shutdown_event.wait(backoff)
+                backoff = min(backoff * 2, max_backoff)
         except Exception as e:
             is_connected = False
             # Don't expose detailed error information
@@ -571,5 +603,9 @@ if __name__ == "__main__":
         if interface:
             try:
                 interface.close()
-            except:
+            except BrokenPipeError:
+                # Expected when connection is already broken
+                pass
+            except Exception:
+                # Ignore other errors during cleanup
                 pass
