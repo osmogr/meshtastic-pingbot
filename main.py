@@ -37,6 +37,17 @@ app = Flask(__name__)
 socketio = SocketIO(app, async_mode="threading")
 MAX_LOG_LINES = 100
 
+# Add template filters
+@app.template_filter('formatTimestamp')
+def format_timestamp(timestamp):
+    """Format Unix timestamp for display"""
+    if not timestamp:
+        return 'Never'
+    try:
+        return datetime.datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+    except:
+        return 'Invalid'
+
 # --- Connection and health tracking ---
 is_connected = False
 message_queue_count = 0
@@ -284,8 +295,12 @@ HTML_TEMPLATE = """
   <title>Meshtastic Ping-Pong Logs</title>
   <style>
     body { font-family: monospace; background: #1e1e1e; color: #eee; margin: 0; padding: 0; }
+    .navbar { background: #2a2a2a; padding: 10px; border-bottom: 1px solid #444; }
+    .navbar a { color: #00ff00; text-decoration: none; margin-right: 20px; padding: 5px 10px; }
+    .navbar a:hover { background: #333; border-radius: 3px; }
+    .navbar a.active { background: #444; border-radius: 3px; }
     h2 { margin: 10px; color: #00ff00; }
-    #logs { height: 90vh; overflow-y: scroll; padding: 10px; box-sizing: border-box; background: #1e1e1e; }
+    #logs { height: 85vh; overflow-y: scroll; padding: 10px; box-sizing: border-box; background: #1e1e1e; }
     .log { margin: 0.2em 0; white-space: pre-wrap; }
     .cyan { color: #00ffff; }
     .green { color: #00ff00; }
@@ -297,6 +312,11 @@ HTML_TEMPLATE = """
   </style>
 </head>
 <body>
+  <div class="navbar">
+    <a href="/" class="active">Live Logs</a>
+    <a href="/nodes">Node Database</a>
+    <a href="/health">Health</a>
+  </div>
   <h2>Meshtastic Ping-Pong Logs</h2>
   <div id="logs"></div>
   <script src="//cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.min.js"></script>
@@ -316,9 +336,514 @@ HTML_TEMPLATE = """
 </html>
 """
 
+NODES_TEMPLATE = """
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Meshtastic Node Database</title>
+  <style>
+    body { font-family: monospace; background: #1e1e1e; color: #eee; margin: 0; padding: 0; }
+    .navbar { background: #2a2a2a; padding: 10px; border-bottom: 1px solid #444; }
+    .navbar a { color: #00ff00; text-decoration: none; margin-right: 20px; padding: 5px 10px; }
+    .navbar a:hover { background: #333; border-radius: 3px; }
+    .navbar a.active { background: #444; border-radius: 3px; }
+    .container { padding: 20px; }
+    h2 { color: #00ff00; margin-bottom: 20px; }
+    
+    .controls { background: #2a2a2a; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+    .controls input, .controls select { 
+      background: #333; color: #eee; border: 1px solid #555; padding: 5px; margin-right: 10px; 
+      border-radius: 3px; font-family: monospace;
+    }
+    .controls button { 
+      background: #444; color: #eee; border: 1px solid #666; padding: 5px 10px; 
+      border-radius: 3px; cursor: pointer; font-family: monospace;
+    }
+    .controls button:hover { background: #555; }
+    
+    .stats { color: #888; margin-bottom: 10px; }
+    
+    table { width: 100%; border-collapse: collapse; background: #2a2a2a; border-radius: 5px; overflow: hidden; }
+    th, td { padding: 8px 12px; border-bottom: 1px solid #444; text-align: left; }
+    th { background: #333; color: #00ff00; font-weight: bold; cursor: pointer; user-select: none; }
+    th:hover { background: #444; }
+    th.sortable::after { content: ' ↕'; opacity: 0.5; }
+    th.sort-asc::after { content: ' ↑'; opacity: 1; color: #00ff00; }
+    th.sort-desc::after { content: ' ↓'; opacity: 1; color: #00ff00; }
+    
+    tbody tr:hover { background: #333; }
+    .node-id { color: #00ffff; font-weight: bold; }
+    .name { color: #ffff00; }
+    .rssi-good { color: #00ff00; }
+    .rssi-ok { color: #ffff00; }
+    .rssi-poor { color: #ff5555; }
+    .snr-good { color: #00ff00; }
+    .snr-ok { color: #ffff00; }
+    .snr-poor { color: #ff5555; }
+    .timestamp { color: #888; font-size: 0.9em; }
+    .boolean-true { color: #00ff00; }
+    .boolean-false { color: #ff5555; }
+    
+    .pagination { margin-top: 20px; text-align: center; }
+    .pagination a, .pagination span { 
+      display: inline-block; padding: 5px 10px; margin: 0 2px; 
+      background: #333; color: #eee; text-decoration: none; border-radius: 3px;
+    }
+    .pagination a:hover { background: #444; }
+    .pagination .current { background: #00ff00; color: #000; }
+    
+    .loading { text-align: center; color: #888; padding: 20px; }
+    .error { color: #ff5555; padding: 10px; background: #332; border-radius: 3px; margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+  <div class="navbar">
+    <a href="/">Live Logs</a>
+    <a href="/nodes" class="active">Node Database</a>
+    <a href="/health">Health</a>
+  </div>
+  
+  <div class="container">
+    <h2>Node Database Browser</h2>
+    
+    <div class="controls">
+      <input type="text" id="searchInput" placeholder="Search nodes..." value="{{ search }}" />
+      <select id="perPageSelect">
+        <option value="25" {% if per_page == 25 %}selected{% endif %}>25 per page</option>
+        <option value="50" {% if per_page == 50 %}selected{% endif %}>50 per page</option>
+        <option value="100" {% if per_page == 100 %}selected{% endif %}>100 per page</option>
+      </select>
+      <button onclick="refreshData()">Refresh</button>
+      <button onclick="exportData()">Export CSV</button>
+    </div>
+    
+    <div class="stats">
+      Total nodes: {{ total_count }} | Page {{ page }} of {{ total_pages }}
+    </div>
+    
+    <div id="error-message"></div>
+    <div id="loading" class="loading" style="display: none;">Loading...</div>
+    
+    <table id="nodesTable">
+      <thead>
+        <tr>
+          <th class="sortable" data-column="node_id">Node ID</th>
+          <th class="sortable" data-column="long_name">Long Name</th>
+          <th class="sortable" data-column="short_name">Short Name</th>
+          <th class="sortable" data-column="rssi">RSSI</th>
+          <th class="sortable" data-column="snr">SNR</th>
+          <th class="sortable" data-column="hop_count">Hops</th>
+          <th class="sortable" data-column="last_heard">Last Heard</th>
+          <th class="sortable" data-column="updated_at">Updated</th>
+          <th>Via MQTT</th>
+          <th>Licensed</th>
+        </tr>
+      </thead>
+      <tbody id="nodesTableBody">
+        {% for node in nodes %}
+        <tr>
+          <td class="node-id">{{ node.node_id }}</td>
+          <td class="name">{{ node.long_name or '-' }}</td>
+          <td class="name">{{ node.short_name or '-' }}</td>
+          <td class="{% if node.rssi and node.rssi|int > -70 %}rssi-good{% elif node.rssi and node.rssi|int > -85 %}rssi-ok{% else %}rssi-poor{% endif %}">
+            {{ node.rssi or 'N/A' }}
+          </td>
+          <td class="{% if node.snr and node.snr|float > 10 %}snr-good{% elif node.snr and node.snr|float >= 0 %}snr-ok{% else %}snr-poor{% endif %}">
+            {{ "%.1f"|format(node.snr) if node.snr else 'N/A' }}
+          </td>
+          <td>{{ node.hop_count or 'N/A' }}</td>
+          <td class="timestamp">{{ node.last_heard|formatTimestamp }}</td>
+          <td class="timestamp">{{ node.updated_at|formatTimestamp }}</td>
+          <td class="{% if node.via_mqtt %}boolean-true{% else %}boolean-false{% endif %}">
+            {{ 'Yes' if node.via_mqtt else 'No' }}
+          </td>
+          <td class="{% if node.is_licensed %}boolean-true{% else %}boolean-false{% endif %}">
+            {{ 'Yes' if node.is_licensed else 'No' }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    
+    <div class="pagination">
+      {% if page > 1 %}
+        <a href="#" onclick="changePage(1)">First</a>
+        <a href="#" onclick="changePage({{ page - 1 }})">Previous</a>
+      {% endif %}
+      
+      {% for p in range([1, page - 2]|max, [total_pages + 1, page + 3]|min) %}
+        {% if p == page %}
+          <span class="current">{{ p }}</span>
+        {% else %}
+          <a href="#" onclick="changePage({{ p }})">{{ p }}</a>
+        {% endif %}
+      {% endfor %}
+      
+      {% if page < total_pages %}
+        <a href="#" onclick="changePage({{ page + 1 }})">Next</a>
+        <a href="#" onclick="changePage({{ total_pages }})">Last</a>
+      {% endif %}
+    </div>
+  </div>
+
+  <script>
+    let currentSort = '{{ sort_by }}';
+    let currentOrder = '{{ sort_order }}';
+    let currentPage = {{ page }};
+    let currentSearch = '{{ search }}';
+    let currentPerPage = {{ per_page }};
+    
+    function formatTimestamp(timestamp) {
+      if (!timestamp) return 'Never';
+      return new Date(timestamp * 1000).toLocaleString();
+    }
+    
+    function updateSortHeaders() {
+      document.querySelectorAll('th.sortable').forEach(th => {
+        th.className = 'sortable';
+        if (th.dataset.column === currentSort) {
+          th.classList.add('sort-' + currentOrder);
+        }
+      });
+    }
+    
+    function sortTable(column) {
+      if (currentSort === column) {
+        currentOrder = currentOrder === 'asc' ? 'desc' : 'asc';
+      } else {
+        currentSort = column;
+        currentOrder = 'desc';
+      }
+      currentPage = 1;
+      loadData();
+    }
+    
+    function changePage(page) {
+      currentPage = page;
+      loadData();
+    }
+    
+    function refreshData() {
+      currentSearch = document.getElementById('searchInput').value;
+      currentPerPage = parseInt(document.getElementById('perPageSelect').value);
+      currentPage = 1;
+      loadData();
+    }
+    
+    function loadData() {
+      document.getElementById('loading').style.display = 'block';
+      document.getElementById('error-message').innerHTML = '';
+      
+      const params = new URLSearchParams({
+        sort: currentSort,
+        order: currentOrder,
+        page: currentPage,
+        per_page: currentPerPage,
+        search: currentSearch
+      });
+      
+      fetch('/nodes?' + params.toString(), {
+        headers: { 'Accept': 'application/json' }
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.error) {
+          throw new Error(data.error);
+        }
+        updateTable(data);
+        updatePagination(data);
+        updateStats(data);
+        updateSortHeaders();
+      })
+      .catch(error => {
+        document.getElementById('error-message').innerHTML = 
+          '<div class="error">Error loading data: ' + error.message + '</div>';
+      })
+      .finally(() => {
+        document.getElementById('loading').style.display = 'none';
+      });
+    }
+    
+    function updateTable(data) {
+      const tbody = document.getElementById('nodesTableBody');
+      tbody.innerHTML = '';
+      
+      data.nodes.forEach(node => {
+        const row = document.createElement('tr');
+        
+        const rssiClass = node.rssi && node.rssi > -70 ? 'rssi-good' : 
+                         node.rssi && node.rssi > -85 ? 'rssi-ok' : 'rssi-poor';
+        const snrClass = node.snr && node.snr > 10 ? 'snr-good' : 
+                        node.snr && node.snr >= 0 ? 'snr-ok' : 'snr-poor';
+        
+        row.innerHTML = `
+          <td class="node-id">${node.node_id}</td>
+          <td class="name">${node.long_name || '-'}</td>
+          <td class="name">${node.short_name || '-'}</td>
+          <td class="${rssiClass}">${node.rssi || 'N/A'}</td>
+          <td class="${snrClass}">${node.snr ? node.snr.toFixed(1) : 'N/A'}</td>
+          <td>${node.hop_count || 'N/A'}</td>
+          <td class="timestamp">${formatTimestamp(node.last_heard)}</td>
+          <td class="timestamp">${formatTimestamp(node.updated_at)}</td>
+          <td class="${node.via_mqtt ? 'boolean-true' : 'boolean-false'}">${node.via_mqtt ? 'Yes' : 'No'}</td>
+          <td class="${node.is_licensed ? 'boolean-true' : 'boolean-false'}">${node.is_licensed ? 'Yes' : 'No'}</td>
+        `;
+        
+        tbody.appendChild(row);
+      });
+    }
+    
+    function updatePagination(data) {
+      // Update pagination dynamically (simplified for now)
+      currentPage = data.page;
+    }
+    
+    function updateStats(data) {
+      document.querySelector('.stats').textContent = 
+        `Total nodes: ${data.total_count} | Page ${data.page} of ${data.total_pages}`;
+    }
+    
+    function exportData() {
+      const params = new URLSearchParams({
+        sort: currentSort,
+        order: currentOrder,
+        search: currentSearch,
+        export: 'csv'
+      });
+      
+      window.open('/nodes/export?' + params.toString());
+    }
+    
+    // Initialize
+    document.addEventListener('DOMContentLoaded', function() {
+      updateSortHeaders();
+      
+      // Add click handlers for sortable headers
+      document.querySelectorAll('th.sortable').forEach(th => {
+        th.addEventListener('click', () => sortTable(th.dataset.column));
+      });
+      
+      // Add enter key handler for search
+      document.getElementById('searchInput').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+          refreshData();
+        }
+      });
+      
+      // Auto-refresh every 30 seconds
+      setInterval(loadData, 30000);
+    });
+  </script>
+</body>
+</html>
+"""
+
 @app.route("/")
 def index():
     return render_template_string(HTML_TEMPLATE, max_lines=MAX_LOG_LINES)
+
+@app.route("/nodes")
+def nodes():
+    """Database browser for nodes"""
+    from flask import request, jsonify
+    
+    # Get query parameters for filtering and sorting
+    sort_by = request.args.get('sort', 'updated_at')
+    sort_order = request.args.get('order', 'desc')
+    search = request.args.get('search', '')
+    page = int(request.args.get('page', 1))
+    per_page = int(request.args.get('per_page', 50))
+    
+    # Validate sort parameters
+    valid_columns = ['node_id', 'long_name', 'short_name', 'rssi', 'snr', 'hop_count', 'last_heard', 'updated_at']
+    if sort_by not in valid_columns:
+        sort_by = 'updated_at'
+    if sort_order not in ['asc', 'desc']:
+        sort_order = 'desc'
+    
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        
+        # Build query with search filter
+        base_query = '''
+            SELECT node_id, long_name, short_name, mac_addr, hw_model, role, 
+                   last_heard, snr, rssi, hop_count, is_licensed, via_mqtt, 
+                   created_at, updated_at
+            FROM nodes
+        '''
+        
+        where_clause = ""
+        params = []
+        
+        if search:
+            where_clause = """
+                WHERE (node_id LIKE ? OR long_name LIKE ? OR short_name LIKE ?)
+            """
+            search_param = f"%{search}%"
+            params = [search_param, search_param, search_param]
+        
+        # Add sorting
+        order_clause = f" ORDER BY {sort_by} {sort_order.upper()}"
+        
+        # Count total records
+        count_query = f"SELECT COUNT(*) FROM nodes{where_clause}"
+        cursor.execute(count_query, params)
+        total_count = cursor.fetchone()[0]
+        
+        # Add pagination
+        limit_clause = f" LIMIT {per_page} OFFSET {(page - 1) * per_page}"
+        
+        # Execute main query
+        full_query = base_query + where_clause + order_clause + limit_clause
+        cursor.execute(full_query, params)
+        
+        nodes_data = []
+        for row in cursor.fetchall():
+            node_data = {
+                'node_id': row[0],
+                'long_name': row[1],
+                'short_name': row[2],
+                'mac_addr': row[3],
+                'hw_model': row[4],
+                'role': row[5],
+                'last_heard': row[6],
+                'snr': row[7],
+                'rssi': row[8],
+                'hop_count': row[9],
+                'is_licensed': row[10],
+                'via_mqtt': row[11],
+                'created_at': row[12],
+                'updated_at': row[13]
+            }
+            nodes_data.append(node_data)
+        
+        conn.close()
+        
+        # Calculate pagination info
+        total_pages = (total_count + per_page - 1) // per_page
+        
+        # If this is an AJAX request, return JSON
+        if request.headers.get('Accept') == 'application/json':
+            return jsonify({
+                'nodes': nodes_data,
+                'total_count': total_count,
+                'page': page,
+                'per_page': per_page,
+                'total_pages': total_pages,
+                'sort_by': sort_by,
+                'sort_order': sort_order,
+                'search': search
+            })
+        
+        # Otherwise return HTML template
+        return render_template_string(NODES_TEMPLATE, 
+                                    nodes=nodes_data,
+                                    total_count=total_count,
+                                    page=page,
+                                    per_page=per_page,
+                                    total_pages=total_pages,
+                                    sort_by=sort_by,
+                                    sort_order=sort_order,
+                                    search=search)
+    
+    except Exception as e:
+        if request.headers.get('Accept') == 'application/json':
+            return jsonify({'error': str(e)}), 500
+        return f"Database error: {e}", 500
+
+@app.route("/nodes/export")
+def export_nodes():
+    """Export nodes data as CSV"""
+    from flask import Response
+    import csv
+    import io
+    
+    # Get query parameters
+    sort_by = request.args.get('sort', 'updated_at')
+    sort_order = request.args.get('order', 'desc')
+    search = request.args.get('search', '')
+    
+    # Validate sort parameters
+    valid_columns = ['node_id', 'long_name', 'short_name', 'rssi', 'snr', 'hop_count', 'last_heard', 'updated_at']
+    if sort_by not in valid_columns:
+        sort_by = 'updated_at'
+    if sort_order not in ['asc', 'desc']:
+        sort_order = 'desc'
+    
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        
+        # Build query with search filter
+        base_query = '''
+            SELECT node_id, long_name, short_name, mac_addr, hw_model, role, 
+                   last_heard, snr, rssi, hop_count, is_licensed, via_mqtt, 
+                   created_at, updated_at
+            FROM nodes
+        '''
+        
+        where_clause = ""
+        params = []
+        
+        if search:
+            where_clause = """
+                WHERE (node_id LIKE ? OR long_name LIKE ? OR short_name LIKE ?)
+            """
+            search_param = f"%{search}%"
+            params = [search_param, search_param, search_param]
+        
+        # Add sorting
+        order_clause = f" ORDER BY {sort_by} {sort_order.upper()}"
+        
+        # Execute query
+        full_query = base_query + where_clause + order_clause
+        cursor.execute(full_query, params)
+        
+        # Create CSV output
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Write header
+        writer.writerow([
+            'Node ID', 'Long Name', 'Short Name', 'MAC Address', 'Hardware Model', 'Role',
+            'Last Heard', 'SNR', 'RSSI', 'Hop Count', 'Licensed', 'Via MQTT',
+            'Created At', 'Updated At'
+        ])
+        
+        # Write data
+        for row in cursor.fetchall():
+            # Convert timestamps to readable format
+            processed_row = list(row)
+            for i in [6, 12, 13]:  # last_heard, created_at, updated_at
+                if processed_row[i]:
+                    processed_row[i] = datetime.datetime.fromtimestamp(processed_row[i]).strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    processed_row[i] = ''
+            
+            # Convert boolean values
+            processed_row[10] = 'Yes' if processed_row[10] else 'No'  # is_licensed
+            processed_row[11] = 'Yes' if processed_row[11] else 'No'  # via_mqtt
+            
+            writer.writerow(processed_row)
+        
+        conn.close()
+        
+        # Create response
+        csv_data = output.getvalue()
+        output.close()
+        
+        response = Response(
+            csv_data,
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename=meshtastic_nodes_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'}
+        )
+        
+        return response
+        
+    except Exception as e:
+        return f"Export error: {e}", 500
 
 @app.route("/health")
 def health():
