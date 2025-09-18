@@ -1499,6 +1499,7 @@ REPLY_COOLDOWN = 15  # seconds
 # Traceroute rate limiting (30 seconds between traceroutes globally)
 last_traceroute_time = 0
 TRACEROUTE_COOLDOWN = 30  # seconds
+TRACEROUTE_TIMEOUT = 15  # seconds to wait for traceroute response
 
 # User-specific traceroute queues (max 2 per user)
 traceroute_queues = defaultdict(list)  # user_id -> list of pending requests
@@ -1718,42 +1719,26 @@ def traceroute_worker():
                 # Send the traceroute request using Meshtastic interface
                 # For now, trace back to the sender (which makes sense for testing connectivity)
                 
-                # Capture stdout to get the traceroute output
-                old_stdout = sys.stdout
-                captured_output = io.StringIO()
-                sys.stdout = captured_output
-                
                 try:
                     interface.sendTraceRoute(dest=target_id, hopLimit=10)
                     
-                    # Wait for the traceroute response using the library's built-in wait mechanism
-                    # This will wait for the onResponseTraceRoute callback to be called
-                    interface.waitForTraceRoute(2.5)
+                    # Wait for the traceroute response - increased timeout for mesh networks
+                    # The response will be handled by handle_traceroute_response via on_receive
+                    interface.waitForTraceRoute(TRACEROUTE_TIMEOUT)
                     
-                    # Restore stdout and get the captured output
-                    sys.stdout = old_stdout
-                    traceroute_output = captured_output.getvalue().strip()
-                    
-                    # If we get here, the traceroute succeeded
-                    # Remove from pending and send the traceroute result
-                    if sender_id in pending_traceroutes:
-                        del pending_traceroutes[sender_id]
-                    
-                    if traceroute_output:
-                        # Send the actual traceroute output to the user
-                        result_msg = f"Traceroute result:\n{traceroute_output}"
-                        # Also log to console since we captured it
-                        print(traceroute_output)
+                    # Check if the traceroute was completed (removed from pending)
+                    if sender_id not in pending_traceroutes:
+                        # Success - response was handled by handle_traceroute_response
+                        log_console_and_discord(f"Traceroute completed for {sender_name}", "green")
+                        log_web(f"Traceroute completed for {sender_name}", "green")
                     else:
-                        result_msg = "Traceroute completed successfully (no route data captured)"
-                    
-                    reply_messages = split_message(result_msg)
-                    send_messages_async(interface, reply_messages, destination_id, sender_name, "Traceroute")
+                        # Timed out - clean up and send timeout message
+                        del pending_traceroutes[sender_id]
+                        error_msg = "Traceroute timed out - no response received"
+                        reply_messages = split_message(error_msg)
+                        send_messages_async(interface, reply_messages, destination_id, sender_name, "Traceroute")
                     
                 except Exception as timeout_error:
-                    # Restore stdout in case of error
-                    sys.stdout = old_stdout
-                    
                     # Traceroute timed out or failed
                     if sender_id in pending_traceroutes:
                         del pending_traceroutes[sender_id]
@@ -1761,10 +1746,6 @@ def traceroute_worker():
                     error_msg = f"Traceroute timed out or failed: {str(timeout_error)[:50]}"
                     reply_messages = split_message(error_msg)
                     send_messages_async(interface, reply_messages, destination_id, sender_name, "Traceroute")
-                finally:
-                    # Ensure stdout is always restored
-                    sys.stdout = old_stdout
-                    captured_output.close()
                 
             except Exception as e:
                 # Clean up pending request on error
@@ -1825,6 +1806,78 @@ def get_about_response():
         f"Channel and DM support. Built for the Meshtastic mesh networking community."
     )
 
+def handle_traceroute_response(packet, interface):
+    """Handle traceroute response packets"""
+    try:
+        sender_id = packet.get("fromId")
+        if sender_id not in pending_traceroutes:
+            return
+            
+        pending_request = pending_traceroutes[sender_id]
+        destination_id = pending_request['destination_id']
+        sender_name = pending_request['sender_name']
+        
+        # Remove from pending requests
+        del pending_traceroutes[sender_id]
+        
+        # Extract information from the packet
+        decoded = packet.get("decoded", {})
+        packet_type = decoded.get("portnum")
+        
+        # Format the traceroute result
+        result_lines = []
+        result_lines.append(f"Traceroute to {sender_name}:")
+        
+        # Add basic packet info
+        hop_start = packet.get("hopStart", 0)
+        hop_limit = packet.get("hopLimit", 0)
+        hops_away = max(0, hop_start - hop_limit)
+        if hops_away > 0:
+            result_lines.append(f"Hops away: {hops_away}")
+        
+        # Add signal quality if available
+        rssi = packet.get("rxRssi")
+        snr = packet.get("rxSnr")
+        if rssi is not None:
+            result_lines.append(f"RSSI: {rssi}dBm")
+        if snr is not None:
+            result_lines.append(f"SNR: {snr:.2f}dB")
+            
+        # Add routing info based on packet type
+        if packet_type == meshtastic.portnums_pb2.ROUTING_APP:
+            routing_data = decoded.get("routing", {})
+            if routing_data:
+                result_lines.append(f"Routing data: {routing_data}")
+            else:
+                result_lines.append("Route discovery successful")
+        elif packet_type == meshtastic.portnums_pb2.TRACEROUTE_APP:
+            # Handle TRACEROUTE_APP specific data
+            trace_data = decoded.get("data", b"")
+            if trace_data:
+                result_lines.append(f"Trace data received: {len(trace_data)} bytes")
+            result_lines.append("Traceroute response received")
+        else:
+            result_lines.append("Response received")
+            
+        # Add timestamp
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        result_lines.append(f"Completed at: {timestamp}")
+            
+        result_msg = "\n".join(result_lines)
+        
+        # Log the result to console
+        log_console_and_discord(f"Traceroute result for {sender_name}: {result_msg}", "green")
+        log_web(f"Traceroute result for {sender_name}: {result_msg}", "green")
+        
+        # Send the result back to the user
+        reply_messages = split_message(result_msg)
+        send_messages_async(interface, reply_messages, destination_id, sender_name, "Traceroute")
+        
+    except Exception as e:
+        log_console_and_discord(f"Error handling traceroute response: {e}", "red")
+        log_web(f"Error handling traceroute response: {e}", "red")
+
 def on_receive(packet=None, interface=None, **kwargs):
     global message_queue_count, is_connected
     
@@ -1833,6 +1886,13 @@ def on_receive(packet=None, interface=None, **kwargs):
     
     # Handle different packet types
     packet_type = packet.get("decoded", {}).get("portnum")
+    
+    # Handle traceroute responses (ROUTING_APP and TRACEROUTE_APP packets)
+    if packet_type in [meshtastic.portnums_pb2.ROUTING_APP, meshtastic.portnums_pb2.TRACEROUTE_APP]:
+        sender_id = packet.get("fromId")
+        if sender_id and sender_id in pending_traceroutes:
+            handle_traceroute_response(packet, interface)
+        return
     
     # Update database for NODEINFO_APP packets
     if packet_type == meshtastic.portnums_pb2.NODEINFO_APP:
