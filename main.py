@@ -236,7 +236,8 @@ def download_nodedb(interface):
         log_web("Downloading nodedb from radio...", "cyan")
         
         # Get node database from the radio
-        nodes = interface.getNodeDB()
+        # Use the nodes property instead of getNodeDB() method which doesn't exist in newer API
+        nodes = interface.nodes
         node_count = 0
         
         if nodes:
