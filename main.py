@@ -1222,6 +1222,83 @@ def health():
                                 connected=health_data["connected"],
                                 queued=health_data["queued"])
 
+@app.route("/nodedb/stats")
+def nodedb_stats():
+    """NodeDB statistics endpoint"""
+    from flask import jsonify, request
+    
+    stats = get_nodedb_statistics()
+    if not stats:
+        stats = {
+            'total_nodes': 0,
+            'complete_nodes': 0,
+            'recent_nodes': 0,
+            'nodes_with_location': 0,
+            'completion_rate': 0
+        }
+    
+    # Add connection status
+    stats['connected'] = is_connected
+    
+    # If this is an API request, return JSON
+    if request.headers.get('Accept') == 'application/json':
+        response = jsonify(stats)
+        response.headers['Content-Type'] = 'application/json'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        return response
+    
+    # Return simple text format for browser
+    return f"""NodeDB Statistics:
+Total Nodes: {stats['total_nodes']}
+Complete Nodes: {stats['complete_nodes']} ({stats['completion_rate']:.1f}%)
+Recent Nodes (24h): {stats['recent_nodes']}
+Nodes with Location: {stats['nodes_with_location']}
+Connected: {stats['connected']}"""
+
+@app.route("/nodedb/refresh", methods=['POST'])
+def nodedb_refresh():
+    """Manually trigger nodedb refresh"""
+    from flask import jsonify, request
+    
+    if not is_connected or not interface:
+        error_msg = "Radio not connected"
+        if request.headers.get('Accept') == 'application/json':
+            return jsonify({"success": False, "error": error_msg}), 400
+        return f"Error: {error_msg}", 400
+    
+    try:
+        # Trigger enhanced nodedb download
+        success = enhanced_download_nodedb(interface)
+        
+        if success:
+            # Get updated stats
+            stats = get_nodedb_statistics()
+            
+            result = {
+                "success": True,
+                "message": "NodeDB refresh completed successfully",
+                "stats": stats
+            }
+            
+            if request.headers.get('Accept') == 'application/json':
+                response = jsonify(result)
+                response.headers['Content-Type'] = 'application/json'
+                return response
+            
+            return f"Success: NodeDB refresh completed. Found {stats['total_nodes'] if stats else 0} nodes."
+        else:
+            error_msg = "NodeDB refresh failed"
+            if request.headers.get('Accept') == 'application/json':
+                return jsonify({"success": False, "error": error_msg}), 500
+            return f"Error: {error_msg}", 500
+            
+    except Exception as e:
+        error_msg = f"NodeDB refresh error: {e}"
+        if request.headers.get('Accept') == 'application/json':
+            return jsonify({"success": False, "error": error_msg}), 500
+        return f"Error: {error_msg}", 500
+
 @app.after_request
 def add_security_headers(response):
     """Add basic security headers"""
