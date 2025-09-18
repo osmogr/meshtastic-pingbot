@@ -7,6 +7,8 @@ import threading
 import os
 import sys
 import sqlite3
+import queue
+from collections import defaultdict
 from pubsub import pub
 from flask import Flask, render_template_string, request
 from flask_socketio import SocketIO
@@ -1492,6 +1494,21 @@ def html_hops(hop_count, hop_start):
 last_reply_time = {}
 REPLY_COOLDOWN = 15  # seconds
 
+# --- Traceroute system ---
+# Traceroute rate limiting (30 seconds between traceroutes globally)
+last_traceroute_time = 0
+TRACEROUTE_COOLDOWN = 30  # seconds
+
+# User-specific traceroute queues (max 2 per user)
+traceroute_queues = defaultdict(list)  # user_id -> list of pending requests
+MAX_TRACEROUTES_PER_USER = 2
+
+# Traceroute processing 
+traceroute_queue = queue.Queue()
+traceroute_shutdown = threading.Event()
+traceroute_thread = None
+pending_traceroutes = {}  # Keep track of pending traceroute requests by user
+
 # --- Message splitting ---
 MAX_MESSAGE_LENGTH = 200  # Meshtastic practical message limit
 
@@ -1620,8 +1637,168 @@ def send_messages_async(interface, messages, destination_id, sender_name, messag
     thread.start()
     return thread
 
+# --- Traceroute functionality ---
+def queue_traceroute(interface, destination_id, sender_name, sender_id):
+    """
+    Queue a traceroute request for a user, respecting per-user limits.
+    """
+    # Check user queue limit
+    user_queue = traceroute_queues[sender_id]
+    if len(user_queue) >= MAX_TRACEROUTES_PER_USER:
+        return False, f"Queue full (max {MAX_TRACEROUTES_PER_USER} per user)"
+    
+    # Add to user queue
+    request_data = {
+        'interface': interface,
+        'destination_id': destination_id,
+        'sender_name': sender_name,
+        'sender_id': sender_id,
+        'target_id': destination_id  # For Meshtastic traceroute, we trace to the sender
+    }
+    user_queue.append(request_data)
+    
+    # Add to processing queue
+    traceroute_queue.put(request_data)
+    
+    # Calculate position in overall queue
+    queue_position = traceroute_queue.qsize()
+    
+    return True, f"Queued (position {queue_position}, max wait ~{queue_position * TRACEROUTE_COOLDOWN}s)"
+
+def format_traceroute_response(response_data):
+    """
+    Format Meshtastic traceroute response for display.
+    """
+    if not response_data:
+        return "No traceroute data received"
+    
+    try:
+        # Extract route information from the response
+        route = response_data.get('route', [])
+        if not route:
+            return "Traceroute completed but no route data"
+        
+        # Format the route
+        hops = []
+        for i, hop in enumerate(route, 1):
+            if isinstance(hop, dict):
+                node_id = hop.get('nodeId', 'Unknown')
+                # Try to get a friendly name for the node
+                node_name = get_node_name(node_id) if node_id != 'Unknown' else 'Unknown'
+                if node_name == node_id:
+                    # If no friendly name, just show the ID
+                    hops.append(f"{i}. {node_id}")
+                else:
+                    hops.append(f"{i}. {node_name} ({node_id})")
+            else:
+                hops.append(f"{i}. {hop}")
+        
+        return f"Traceroute ({len(hops)} hops): " + " → ".join(hops)
+    
+    except Exception as e:
+        return f"Error formatting traceroute: {str(e)[:50]}"
+
+def traceroute_worker():
+    """
+    Worker thread that processes traceroute requests with rate limiting.
+    """
+    global last_traceroute_time
+    
+    while not traceroute_shutdown.is_set():
+        try:
+            # Wait for a request (blocking with timeout)
+            request_data = traceroute_queue.get(timeout=1.0)
+            if request_data is None:  # Shutdown signal
+                break
+            
+            interface = request_data['interface']
+            destination_id = request_data['destination_id']
+            sender_name = request_data['sender_name']
+            sender_id = request_data['sender_id']
+            target_id = request_data['target_id']
+            
+            # Remove from user queue
+            user_queue = traceroute_queues[sender_id]
+            if request_data in user_queue:
+                user_queue.remove(request_data)
+            
+            # Check if we need to wait for rate limiting
+            current_time = time.time()
+            time_since_last = current_time - last_traceroute_time
+            
+            if time_since_last < TRACEROUTE_COOLDOWN:
+                wait_time = TRACEROUTE_COOLDOWN - time_since_last
+                log_console_and_discord(f"Traceroute rate limit: waiting {wait_time:.1f}s for {sender_name}", "yellow")
+                log_web(f"Traceroute rate limit: waiting {wait_time:.1f}s for {sender_name}", "yellow")
+                time.sleep(wait_time)
+            
+            # Update last traceroute time
+            last_traceroute_time = time.time()
+            
+            # Run the Meshtastic traceroute
+            log_console_and_discord(f"Running Meshtastic traceroute for {sender_name}...", "cyan")
+            log_web(f"Running Meshtastic traceroute for {sender_name}...", "cyan")
+            
+            try:
+                # Store the pending request so we can match the response
+                pending_traceroutes[sender_id] = {
+                    'destination_id': destination_id,
+                    'sender_name': sender_name,
+                    'timestamp': time.time()
+                }
+                
+                # Send the traceroute request using Meshtastic interface
+                # For now, trace back to the sender (which makes sense for testing connectivity)
+                interface.sendTraceRoute(dest=target_id, hopLimit=10)
+                
+                # The response will be handled by the packet handler when it arrives
+                # We'll wait a bit and then check if we got a response
+                response_timeout = 30  # 30 seconds to wait for response
+                start_time = time.time()
+                
+                while (time.time() - start_time) < response_timeout:
+                    if sender_id not in pending_traceroutes:
+                        # Response was processed
+                        break
+                    time.sleep(1)
+                
+                # If we still have a pending request, it timed out
+                if sender_id in pending_traceroutes:
+                    del pending_traceroutes[sender_id]
+                    reply_messages = split_message("Traceroute timed out - no response received")
+                    send_messages_async(interface, reply_messages, destination_id, sender_name, "Traceroute")
+                
+            except Exception as e:
+                # Clean up pending request on error
+                if sender_id in pending_traceroutes:
+                    del pending_traceroutes[sender_id]
+                
+                error_msg = f"Traceroute failed: {str(e)[:100]}"
+                reply_messages = split_message(error_msg)
+                send_messages_async(interface, reply_messages, destination_id, sender_name, "Traceroute")
+            
+            # Mark task as done
+            traceroute_queue.task_done()
+            
+        except queue.Empty:
+            continue  # Timeout, check shutdown flag
+        except Exception as e:
+            log_console_and_discord(f"Traceroute worker error: {e}", "red")
+            log_web(f"Traceroute worker error: {e}", "red")
+
+def start_traceroute_worker():
+    """
+    Start the traceroute worker thread.
+    """
+    global traceroute_thread
+    if traceroute_thread is None or not traceroute_thread.is_alive():
+        traceroute_thread = threading.Thread(target=traceroute_worker, daemon=True, name="TracerouteWorker")
+        traceroute_thread.start()
+        log_console_and_discord("Meshtastic traceroute worker started", "green")
+        log_web("Meshtastic traceroute worker started", "green")
+
 # --- Packet handler ---
-TRIGGERS = ["ping", "hello", "test"]
+TRIGGERS = ["ping", "hello", "test", "traceroute"]
 DM_COMMANDS = ["help", "/help", "about", "/about"]
 
 def get_help_response():
@@ -1629,10 +1806,14 @@ def get_help_response():
     return (
         f"Meshtastic Pingbot Help:\n\n"
         f"I respond to these triggers in channels and DMs: {', '.join(TRIGGERS)}\n\n"
+
+        f"Commands:\n"
+        f"• ping/hello/test - Connection info (RSSI, SNR, hop count)\n"
+        f"• traceroute - Meshtastic network path trace (30s rate limit, max 2 queued per user)\n\n"
         f"Enhanced ping command: 'ping N' where N is 1-5 for multiple responses.\n\n"
+
         f"DM-only commands: help, /help - Show this help message. "
-        f"about, /about - Show information about this bot.\n\n"
-        f"When you send a trigger, I'll respond with connection info including RSSI, SNR, and hop count."
+        f"about, /about - Show information about this bot."
     )
 
 def get_about_response():
@@ -1673,6 +1854,36 @@ def on_receive(packet=None, interface=None, **kwargs):
             sender_name = get_node_name(sender_id)
             log_console_and_discord(f"Updated neighbor info for {sender_name} ({sender_id})", "blue")
             log_web(f"Updated neighbor info for {sender_name} ({sender_id})", "blue")
+        return
+    
+    # Handle traceroute responses
+    if packet_type == meshtastic.portnums_pb2.TRACEROUTE_APP:
+        sender_id = packet.get("fromId")
+        if sender_id and sender_id in pending_traceroutes:
+            pending_request = pending_traceroutes[sender_id]
+            destination_id = pending_request['destination_id']
+            sender_name = pending_request['sender_name']
+            
+            # Remove from pending
+            del pending_traceroutes[sender_id]
+            
+            # Process the traceroute response
+            log_console_and_discord(f"Received traceroute response from {sender_name}", "cyan")
+            log_web(f"Received traceroute response from {sender_name}", "cyan")
+            
+            try:
+                # Format the traceroute response
+                response_data = packet.get("decoded", {})
+                result = format_traceroute_response(response_data)
+                
+                # Send the result
+                reply_messages = split_message(f"Traceroute result: {result}")
+                send_messages_async(interface, reply_messages, destination_id, sender_name, "Traceroute")
+                
+            except Exception as e:
+                error_msg = f"Error processing traceroute response: {str(e)[:50]}"
+                reply_messages = split_message(error_msg)
+                send_messages_async(interface, reply_messages, destination_id, sender_name, "Traceroute")
         return
     
     # Handle text messages (existing functionality)
@@ -1723,7 +1934,36 @@ def on_receive(packet=None, interface=None, **kwargs):
             send_messages_async(interface, reply_messages, packet["fromId"], sender, "DM Help/About")
             return
 
+        # Handle traceroute command separately (special rate limiting)
+        if msg == "traceroute":
+            # Check regular rate limit first
+            now = time.time()
+            if sender_id in last_reply_time and (now - last_reply_time[sender_id]) < REPLY_COOLDOWN:
+                log_console_and_discord(f"Rate-limited reply to {sender}", "yellow")
+                log_web(f"Rate-limited reply to {sender}", "yellow")
+                return
+
+            last_reply_time[sender_id] = now
+            
+            # Queue the traceroute request
+            success, message = queue_traceroute(interface, packet["fromId"], sender, sender_id)
+            
+            if success:
+                reply = f"Traceroute queued: {message}"
+                log_console_and_discord(f"Traceroute queued for {sender}: {message}", "cyan")
+                log_web(f"Traceroute queued for {sender}: {message}", "cyan")
+            else:
+                reply = f"Traceroute failed: {message}"
+                log_console_and_discord(f"Traceroute failed for {sender}: {message}", "yellow")
+                log_web(f"Traceroute failed for {sender}: {message}", "yellow")
+            
+            reply_messages = split_message(reply)
+            send_messages_async(interface, reply_messages, packet["fromId"], sender, "Traceroute Queue")
+            return
+
         # Handle existing triggers (ping, hello, test) - work in both channels and DMs
+
+        if msg in ["ping", "hello", "test"]:
         # Also handle "ping N" where N is 1-5 for multiple pong responses
         ping_count = 1
         if msg in TRIGGERS or (msg.startswith("ping ") and len(msg.split()) == 2):
@@ -2000,6 +2240,9 @@ if __name__ == "__main__":
             print("Failed to initialize database, exiting...")
             sys.exit(1)
         
+        # Start traceroute worker
+        start_traceroute_worker()
+        
         interface = connect_radio()
         log_console("Starting web server...", "green", True)
         log_web("Starting web server...", "green", True)
@@ -2007,9 +2250,12 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         log_console("Shutting down...", "yellow")
         shutdown_event.set()
+        traceroute_shutdown.set()
     except Exception as e:
         log_console(f"Fatal error: {e}", "red")
         shutdown_event.set()
+        traceroute_shutdown.set()
     finally:
         # Clean shutdown
+        traceroute_shutdown.set()
         cleanup_interface()

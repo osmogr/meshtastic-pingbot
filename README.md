@@ -23,6 +23,9 @@ The bot now maintains a SQLite database (`nodedb.sqlite`) to store information a
 
 **Triggers (work in channels and DMs):**
 - `ping`, `hello`, `test` - Responds with connection info (RSSI, SNR, hop count)
+
+- `traceroute` - Performs Meshtastic network path trace (rate limited: 30s globally, max 2 queued per user)
+=======
 - `ping N` - Responds N times (where N is 1-5) with connection info
 
 **DM-Only Commands:**
