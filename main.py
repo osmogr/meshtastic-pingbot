@@ -336,11 +336,27 @@ def download_nodedb(interface):
                                 # Handle dictionary format
                                 for key, value in data.items():
                                     if key == 'user' and isinstance(value, dict):
-                                        # Convert user dict to object
+                                        # Convert user dict to object with normalized field names
                                         user_obj = type('obj', (object,), {})()
                                         for uk, uv in value.items():
-                                            setattr(user_obj, uk, uv)
+                                            # Normalize camelCase to snake_case for consistency
+                                            if uk == 'longName':
+                                                setattr(user_obj, 'long_name', uv)
+                                            elif uk == 'shortName':
+                                                setattr(user_obj, 'short_name', uv)
+                                            elif uk == 'hwModel':
+                                                setattr(user_obj, 'hw_model', uv)
+                                            elif uk == 'isLicensed':
+                                                setattr(user_obj, 'is_licensed', uv)
+                                            else:
+                                                setattr(user_obj, uk, uv)
                                         setattr(self, key, user_obj)
+                                    elif key == 'lastHeard':
+                                        # Normalize camelCase to snake_case
+                                        setattr(self, 'last_heard', value)
+                                    elif key == 'deviceMetrics':
+                                        # Normalize camelCase to snake_case
+                                        setattr(self, 'device_metrics', value)
                                     else:
                                         setattr(self, key, value)
                             else:
