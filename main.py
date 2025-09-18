@@ -5,6 +5,7 @@ import time
 import requests
 import threading
 import os
+import sys
 from pubsub import pub
 from flask import Flask, render_template_string, request
 from flask_socketio import SocketIO
@@ -656,6 +657,35 @@ def connect_radio():
         raise ConnectionError("Failed to connect to radio")
     
     return interface
+
+# Override default exception handler to catch background thread errors
+original_excepthook = sys.excepthook
+
+def custom_excepthook(exc_type, exc_value, exc_traceback):
+    """Custom exception handler to catch main thread socket errors"""
+    if issubclass(exc_type, (BrokenPipeError, ConnectionResetError, OSError)):
+        print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Main thread socket error detected: {exc_type.__name__}")
+        try:
+            handle_socket_error()
+        except NameError:
+            original_excepthook(exc_type, exc_value, exc_traceback)
+    else:
+        original_excepthook(exc_type, exc_value, exc_traceback)
+
+def custom_threading_excepthook(args):
+    """Custom exception handler for background thread socket errors"""
+    if issubclass(args.exc_type, (BrokenPipeError, ConnectionResetError, OSError)):
+        print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Background thread socket error detected: {args.exc_type.__name__}")
+        try:
+            handle_socket_error()
+        except NameError:
+            # If handle_socket_error is not yet defined, just print the error
+            print(f"Socket error in thread {args.thread.name}: {args.exc_value}")
+
+sys.excepthook = custom_excepthook
+# Set threading excepthook if available (Python 3.8+)
+if hasattr(threading, 'excepthook'):
+    threading.excepthook = custom_threading_excepthook
 
 # --- Main ---
 if __name__ == "__main__":
