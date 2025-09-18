@@ -1499,6 +1499,7 @@ REPLY_COOLDOWN = 15  # seconds
 # Traceroute rate limiting (30 seconds between traceroutes globally)
 last_traceroute_time = 0
 TRACEROUTE_COOLDOWN = 30  # seconds
+TRACEROUTE_TIMEOUT = 15  # seconds to wait for traceroute response
 
 # User-specific traceroute queues (max 2 per user)
 traceroute_queues = defaultdict(list)  # user_id -> list of pending requests
@@ -1723,7 +1724,7 @@ def traceroute_worker():
                     
                     # Wait for the traceroute response - increased timeout for mesh networks
                     # The response will be handled by handle_traceroute_response via on_receive
-                    interface.waitForTraceRoute(15.0)  # Increased from 2.5 to 15 seconds
+                    interface.waitForTraceRoute(TRACEROUTE_TIMEOUT)
                     
                     # Check if the traceroute was completed (removed from pending)
                     if sender_id not in pending_traceroutes:
@@ -1819,16 +1820,18 @@ def handle_traceroute_response(packet, interface):
         # Remove from pending requests
         del pending_traceroutes[sender_id]
         
-        # Extract routing information from the packet
+        # Extract information from the packet
         decoded = packet.get("decoded", {})
-        routing_data = decoded.get("routing", {})
+        packet_type = decoded.get("portnum")
         
         # Format the traceroute result
         result_lines = []
         result_lines.append(f"Traceroute to {sender_name}:")
         
         # Add basic packet info
-        hops_away = packet.get("hopStart", 0) - packet.get("hopLimit", 0)
+        hop_start = packet.get("hopStart", 0)
+        hop_limit = packet.get("hopLimit", 0)
+        hops_away = max(0, hop_start - hop_limit)
         if hops_away > 0:
             result_lines.append(f"Hops away: {hops_away}")
         
@@ -1840,11 +1843,26 @@ def handle_traceroute_response(packet, interface):
         if snr is not None:
             result_lines.append(f"SNR: {snr:.2f}dB")
             
-        # Add routing info if available
-        if routing_data:
-            result_lines.append(f"Routing data: {routing_data}")
+        # Add routing info based on packet type
+        if packet_type == meshtastic.portnums_pb2.ROUTING_APP:
+            routing_data = decoded.get("routing", {})
+            if routing_data:
+                result_lines.append(f"Routing data: {routing_data}")
+            else:
+                result_lines.append("Route discovery successful")
+        elif packet_type == meshtastic.portnums_pb2.TRACEROUTE_APP:
+            # Handle TRACEROUTE_APP specific data
+            trace_data = decoded.get("data", b"")
+            if trace_data:
+                result_lines.append(f"Trace data received: {len(trace_data)} bytes")
+            result_lines.append("Traceroute response received")
         else:
-            result_lines.append("Route discovery successful")
+            result_lines.append("Response received")
+            
+        # Add timestamp
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        result_lines.append(f"Completed at: {timestamp}")
             
         result_msg = "\n".join(result_lines)
         
@@ -1869,8 +1887,8 @@ def on_receive(packet=None, interface=None, **kwargs):
     # Handle different packet types
     packet_type = packet.get("decoded", {}).get("portnum")
     
-    # Handle traceroute responses (ROUTING_APP packets)
-    if packet_type == meshtastic.portnums_pb2.ROUTING_APP:
+    # Handle traceroute responses (ROUTING_APP and TRACEROUTE_APP packets)
+    if packet_type in [meshtastic.portnums_pb2.ROUTING_APP, meshtastic.portnums_pb2.TRACEROUTE_APP]:
         sender_id = packet.get("fromId")
         if sender_id and sender_id in pending_traceroutes:
             handle_traceroute_response(packet, interface)
