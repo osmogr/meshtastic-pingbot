@@ -1965,7 +1965,7 @@ def on_receive(packet=None, interface=None, **kwargs):
 
         if msg in ["ping", "hello", "test"]:
         # Also handle "ping N" where N is 1-5 for multiple pong responses
-        ping_count = 1
+            ping_count = 1
         if msg in TRIGGERS or (msg.startswith("ping ") and len(msg.split()) == 2):
             # Check for "ping N" format
             if msg.startswith("ping ") and len(msg.split()) == 2:
