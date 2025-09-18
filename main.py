@@ -152,30 +152,32 @@ def update_node_info(node_id, node_info=None, packet_info=None):
                     pass
             
             if hasattr(node_info, 'user') and node_info.user:
-                if hasattr(node_info.user, 'longName') and node_info.user.longName:
-                    update_data['long_name'] = node_info.user.longName
-                if hasattr(node_info.user, 'shortName') and node_info.user.shortName:
-                    update_data['short_name'] = node_info.user.shortName
+                # Use correct protobuf field names (snake_case)
+                if hasattr(node_info.user, 'long_name') and node_info.user.long_name:
+                    update_data['long_name'] = node_info.user.long_name
+                if hasattr(node_info.user, 'short_name') and node_info.user.short_name:
+                    update_data['short_name'] = node_info.user.short_name
                 if hasattr(node_info.user, 'macaddr') and node_info.user.macaddr:
                     update_data['mac_addr'] = node_info.user.macaddr
-                if hasattr(node_info.user, 'hwModel'):
-                    update_data['hw_model'] = node_info.user.hwModel
+                if hasattr(node_info.user, 'hw_model'):
+                    update_data['hw_model'] = node_info.user.hw_model
                 if hasattr(node_info.user, 'role'):
                     update_data['role'] = node_info.user.role
-                if hasattr(node_info.user, 'isLicensed'):
-                    update_data['is_licensed'] = node_info.user.isLicensed
+                if hasattr(node_info.user, 'is_licensed'):
+                    update_data['is_licensed'] = node_info.user.is_licensed
             else:
                 # Debug: Log when user data is missing
                 if update_node_info.debug_count <= 5:
                     print(f"[DEBUG] Node {node_id} missing user data")
             
-            if hasattr(node_info, 'lastHeard') and node_info.lastHeard:
-                update_data['last_heard'] = node_info.lastHeard
+            # Use correct protobuf field names (snake_case)
+            if hasattr(node_info, 'last_heard') and node_info.last_heard:
+                update_data['last_heard'] = node_info.last_heard
             if hasattr(node_info, 'snr') and node_info.snr is not None:
                 update_data['snr'] = node_info.snr
             if hasattr(node_info, 'rssi') and node_info.rssi is not None:
                 update_data['rssi'] = node_info.rssi
-            if hasattr(node_info, 'deviceMetrics') and node_info.deviceMetrics:
+            if hasattr(node_info, 'device_metrics') and node_info.device_metrics:
                 # Extract additional metrics if available
                 pass
         else:
@@ -1573,6 +1575,35 @@ def send_multiple_messages(interface, messages, destination_id):
     
     return success_count == total_messages
 
+def send_messages_async(interface, messages, destination_id, sender_name, message_type="Reply"):
+    """
+    Send messages asynchronously in a separate thread to avoid blocking message reception.
+    """
+    def send_task():
+        try:
+            success = send_multiple_messages(interface, messages, destination_id)
+            
+            if success:
+                if len(messages) == 1:
+                    console = f"{message_type} -> {sender_name}: {messages[0]}"
+                else:
+                    console = f"{message_type} -> {sender_name}: {len(messages)} message{'s' if len(messages) > 1 else ''}"
+                log_console_and_discord(console, "green")
+                log_web(console, "green")
+            else:
+                console = f"Failed to send {message_type.lower()} -> {sender_name}"
+                log_console_and_discord(console, "red")
+                log_web(console, "red")
+        except Exception as e:
+            console = f"Error sending {message_type.lower()} -> {sender_name}: {e}"
+            log_console_and_discord(console, "red")
+            log_web(console, "red")
+    
+    # Start the sending task in a separate thread
+    thread = threading.Thread(target=send_task, daemon=True)
+    thread.start()
+    return thread
+
 # --- Packet handler ---
 TRIGGERS = ["ping", "hello", "test"]
 DM_COMMANDS = ["help", "/help", "about", "/about"]
@@ -1670,17 +1701,8 @@ def on_receive(packet=None, interface=None, **kwargs):
             # Split the reply into multiple messages if needed
             reply_messages = split_message(reply)
             
-            # Send reply with connection error handling
-            success = send_multiple_messages(interface, reply_messages, packet["fromId"])
-            
-            if success:
-                console = f"DM Help/About -> {sender}: {msg} command ({len(reply_messages)} message{'s' if len(reply_messages) > 1 else ''})"
-                log_console_and_discord(console, "green")
-                log_web(console, "green")
-            else:
-                console = f"Failed to send DM Help/About -> {sender}: {msg} command"
-                log_console_and_discord(console, "red")
-                log_web(console, "red")
+            # Send reply asynchronously to avoid blocking message reception
+            send_messages_async(interface, reply_messages, packet["fromId"], sender, "DM Help/About")
             return
 
         # Handle existing triggers (ping, hello, test) - work in both channels and DMs
@@ -1704,17 +1726,8 @@ def on_receive(packet=None, interface=None, **kwargs):
             # Split the reply into multiple messages if needed (though ping responses are usually short)
             reply_messages = split_message(reply)
             
-            # Send reply with connection error handling
-            success = send_multiple_messages(interface, reply_messages, packet["fromId"])
-            
-            if success:
-                console = f"Reply -> {sender}: {reply}"
-                log_console_and_discord(console, "green")
-                log_web(console, "green")
-            else:
-                console = f"Failed to send reply -> {sender}"
-                log_console_and_discord(console, "red")
-                log_web(console, "red")
+            # Send reply asynchronously to avoid blocking message reception
+            send_messages_async(interface, reply_messages, packet["fromId"], sender, "Reply")
             
     except Exception as e:
         # Log error without exposing sensitive details
