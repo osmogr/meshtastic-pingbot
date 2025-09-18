@@ -337,6 +337,86 @@ HTML_TEMPLATE = """
 </html>
 """
 
+HEALTH_TEMPLATE = """
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Meshtastic Pingbot - Health Status</title>
+  <style>
+    body { font-family: monospace; background: #1e1e1e; color: #eee; margin: 0; padding: 0; }
+    .navbar { background: #2a2a2a; padding: 10px; border-bottom: 1px solid #444; }
+    .navbar a { color: #00ff00; text-decoration: none; margin-right: 20px; padding: 5px 10px; }
+    .navbar a:hover { background: #333; border-radius: 3px; }
+    .navbar a.active { background: #444; border-radius: 3px; }
+    .container { padding: 20px; }
+    h2 { margin: 0 0 20px 0; color: #00ff00; }
+    .status-card { background: #2a2a2a; border-radius: 8px; padding: 20px; margin-bottom: 20px; border-left: 4px solid #555; }
+    .status-connected { border-left-color: #00ff00; }
+    .status-disconnected { border-left-color: #ff5555; }
+    .status-header { font-size: 1.2em; font-weight: bold; margin-bottom: 10px; }
+    .status-value { font-size: 1.5em; margin: 10px 0; }
+    .connected { color: #00ff00; }
+    .disconnected { color: #ff5555; }
+    .metric { margin: 10px 0; }
+    .metric-label { color: #888; display: inline-block; width: 120px; }
+    .metric-value { color: #00ffff; font-weight: bold; }
+    .refresh-btn { background: #333; border: 1px solid #555; color: #eee; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-top: 20px; }
+    .refresh-btn:hover { background: #444; }
+    .timestamp { color: #888; font-size: 0.9em; margin-top: 15px; }
+  </style>
+</head>
+<body>
+  <div class="navbar">
+    <a href="/">Live Logs</a>
+    <a href="/nodes">Node Database</a>
+    <a href="/health" class="active">Health</a>
+  </div>
+  <div class="container">
+    <h2>Health Status</h2>
+    
+    <div class="status-card {{ 'status-connected' if connected else 'status-disconnected' }}">
+      <div class="status-header">Connection Status</div>
+      <div class="status-value {{ 'connected' if connected else 'disconnected' }}">
+        {{ 'CONNECTED' if connected else 'DISCONNECTED' }}
+      </div>
+      <div class="metric">
+        <span class="metric-label">Radio Link:</span>
+        <span class="metric-value">{{ 'Active' if connected else 'Inactive' }}</span>
+      </div>
+    </div>
+    
+    <div class="status-card">
+      <div class="status-header">Message Queue</div>
+      <div class="metric">
+        <span class="metric-label">Queued Messages:</span>
+        <span class="metric-value">{{ queued }}</span>
+      </div>
+      <div class="metric">
+        <span class="metric-label">Queue Status:</span>
+        <span class="metric-value">{{ 'Normal' if queued < 10 else 'High' if queued < 50 else 'Critical' }}</span>
+      </div>
+    </div>
+    
+    <button class="refresh-btn" onclick="window.location.reload()">Refresh Status</button>
+    
+    <div class="timestamp">
+      Last updated: <span id="timestamp"></span>
+    </div>
+  </div>
+  
+  <script>
+    document.getElementById('timestamp').textContent = new Date().toLocaleString();
+    
+    // Auto-refresh every 30 seconds
+    setTimeout(function() {
+      window.location.reload();
+    }, 30000);
+  </script>
+</body>
+</html>
+"""
+
 NODES_TEMPLATE = """
 <!doctype html>
 <html lang="en">
@@ -849,17 +929,26 @@ def export_nodes():
 @app.route("/health")
 def health():
     """Health check endpoint"""
-    from flask import jsonify
+    from flask import jsonify, request, render_template_string
     
-    # Add security headers
-    response = jsonify({
+    health_data = {
         "connected": is_connected,
         "queued": message_queue_count
-    })
-    response.headers['Content-Type'] = 'application/json'
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'DENY'
-    return response
+    }
+    
+    # If this is an API request (Accept: application/json), return JSON
+    if request.headers.get('Accept') == 'application/json':
+        # Add security headers for JSON response
+        response = jsonify(health_data)
+        response.headers['Content-Type'] = 'application/json'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        return response
+    
+    # Otherwise return HTML template for web interface
+    return render_template_string(HEALTH_TEMPLATE, 
+                                connected=health_data["connected"],
+                                queued=health_data["queued"])
 
 @app.after_request
 def add_security_headers(response):
