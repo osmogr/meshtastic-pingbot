@@ -339,15 +339,20 @@ def send_multiple_messages(interface, messages, destination_id):
             if i < total_messages:
                 time.sleep(0.5)
                 
-        except BrokenPipeError as e:
-            log_console_and_discord(f"Failed to send message {i}/{total_messages}: broken pipe (connection lost)", "red")
-            log_web(f"Failed to send message {i}/{total_messages}: broken pipe (connection lost)", "red")
-            is_connected = False
+        except (BrokenPipeError, ConnectionResetError, OSError) as e:
+            message_queue_count -= 1
+            log_console_and_discord(f"Failed to send message {i}/{total_messages}: socket error (connection lost)", "red")
+            log_web(f"Failed to send message {i}/{total_messages}: socket error (connection lost)", "red")
+            handle_socket_error()
+            # Trigger immediate cleanup in background
+            with connection_lock:
+                cleanup_interface()
             return False
         except Exception as e:
-            log_console_and_discord(f"Failed to send message {i}/{total_messages}: connection error", "red")
-            log_web(f"Failed to send message {i}/{total_messages}: connection error", "red")
-            is_connected = False
+            message_queue_count -= 1
+            log_console_and_discord(f"Failed to send message {i}/{total_messages}: operation error", "red")
+            log_web(f"Failed to send message {i}/{total_messages}: operation error", "red")
+            # Don't mark as disconnected for non-socket errors, but still fail the send
             return False
     
     return success_count == total_messages
@@ -474,6 +479,48 @@ connection_lock = threading.Lock()
 reconnect_thread = None
 shutdown_event = threading.Event()
 
+# Track socket errors to detect heartbeat failures
+socket_error_count = 0
+socket_error_lock = threading.Lock()
+
+def handle_socket_error():
+    """Handle socket errors detected from any source"""
+    global is_connected, socket_error_count
+    
+    with socket_error_lock:
+        socket_error_count += 1
+        if socket_error_count >= 1:  # Immediate response to socket errors
+            if is_connected:
+                log_console_and_discord("Socket error detected - marking connection as failed", "red")
+                log_web("Socket error detected - marking connection as failed", "red")
+                is_connected = False
+                # Reset counter after marking disconnected
+                socket_error_count = 0
+
+def cleanup_interface():
+    """Safely cleanup the interface connection"""
+    global interface
+    if interface:
+        try:
+            # First try to gracefully disconnect
+            if hasattr(interface, '_sendDisconnect'):
+                interface._sendDisconnect()
+        except:
+            # Ignore errors during disconnect
+            pass
+        
+        try:
+            # Then close the connection
+            interface.close()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            # Expected when connection is already broken
+            pass
+        except Exception:
+            # Ignore other errors during cleanup
+            pass
+        finally:
+            interface = None
+
 def monitor_connection():
     """Monitor connection and reconnect if needed"""
     global is_connected, interface, reconnect_thread, local_radio_name
@@ -488,62 +535,84 @@ def monitor_connection():
                 log_web("Attempting connection to radio...", "yellow")
                 
                 with connection_lock:
-                    if interface:
-                        try:
-                            interface.close()
-                        except BrokenPipeError:
-                            # Expected when connection is already broken
-                            pass
-                        except Exception:
-                            # Ignore other errors during cleanup
-                            pass
-                        interface = None
+                    cleanup_interface()
                     
-                    interface = meshtastic.tcp_interface.TCPInterface(hostname=DEVICE_IP)
-                    pub.subscribe(on_receive, "meshtastic.receive")
-                    is_connected = True
-                    backoff = 2  # Reset backoff on successful connection
-                    
-                    # Get the local radio name after successful connection
                     try:
-                        # Wait a moment for the interface to be fully ready
-                        time.sleep(2)
-                        local_radio_name = get_local_radio_name(interface)
-                        if local_radio_name:
-                            log_console_and_discord(f"Retrieved local radio name: {local_radio_name}", "cyan")
-                            log_web(f"Retrieved local radio name: {local_radio_name}", "cyan")
-                        else:
-                            log_console_and_discord("Could not retrieve local radio name", "yellow")
-                            log_web("Could not retrieve local radio name", "yellow")
+                        interface = meshtastic.tcp_interface.TCPInterface(hostname=DEVICE_IP)
+                        pub.subscribe(on_receive, "meshtastic.receive")
+                        is_connected = True
+                        backoff = 2  # Reset backoff on successful connection
+                        
+                        # Reset socket error count on successful connection
+                        with socket_error_lock:
+                            socket_error_count = 0
+                        
+                        # Get the local radio name after successful connection
+                        try:
+                            # Wait a moment for the interface to be fully ready
+                            time.sleep(2)
+                            local_radio_name = get_local_radio_name(interface)
+                            if local_radio_name:
+                                log_console_and_discord(f"Retrieved local radio name: {local_radio_name}", "cyan")
+                                log_web(f"Retrieved local radio name: {local_radio_name}", "cyan")
+                            else:
+                                log_console_and_discord("Could not retrieve local radio name", "yellow")
+                                log_web("Could not retrieve local radio name", "yellow")
+                        except Exception as e:
+                            log_console_and_discord("Failed to retrieve local radio name", "yellow")
+                            log_web("Failed to retrieve local radio name", "yellow")
+                            local_radio_name = ""
+                        
+                        log_console_and_discord("Connected to Meshtastic radio", "green", True)
+                        log_web("Connected to Meshtastic radio", "green", True)
+                        
+                    except (BrokenPipeError, ConnectionResetError, OSError) as e:
+                        log_console_and_discord("Connection failed: socket error during interface creation", "red")
+                        log_web("Connection failed: socket error during interface creation", "red")
+                        cleanup_interface()
+                        raise
                     except Exception as e:
-                        log_console_and_discord("Failed to retrieve local radio name", "yellow")
-                        log_web("Failed to retrieve local radio name", "yellow")
-                        local_radio_name = ""
+                        log_console_and_discord("Connection failed: unable to create interface", "red")
+                        log_web("Connection failed: unable to create interface", "red")
+                        cleanup_interface()
+                        raise
                 
-                log_console_and_discord("Connected to Meshtastic radio", "green", True)
-                log_web("Connected to Meshtastic radio", "green", True)
-                
-            # Check if connection is still alive by attempting a simple operation
+            # Enhanced connection health check
             # This helps detect broken pipes and connection issues early
+            connection_healthy = False
             try:
-                # Try to access the interface to check if it's still responsive
-                if interface and hasattr(interface, 'getMyNodeInfo'):
-                    # This is a lightweight operation to test connection health
+                if interface and is_connected:
+                    # Try multiple lightweight operations to test connection health
                     interface.getMyNodeInfo()
-                time.sleep(30)  # Check every 30 seconds
-            except BrokenPipeError:
-                log_console_and_discord("Connection health check failed: broken pipe detected", "red")
-                log_web("Connection health check failed: broken pipe detected", "red")
-                is_connected = False
+                    # Small delay to allow any background thread errors to surface
+                    time.sleep(1)
+                    # If we get here without exception, connection seems healthy
+                    connection_healthy = True
+                    
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                log_console_and_discord("Connection health check failed: socket error detected", "red")
+                log_web("Connection health check failed: socket error detected", "red")
+                handle_socket_error()
+                with connection_lock:
+                    cleanup_interface()
                 continue
-            except Exception:
-                # Don't fail on health check errors, just continue monitoring
-                time.sleep(30)
+            except Exception as e:
+                # For other exceptions, don't immediately fail the connection
+                # but log the issue
+                log_console_and_discord("Connection health check warning: operation failed", "yellow")
+                log_web("Connection health check warning: operation failed", "yellow")
+                connection_healthy = True  # Don't fail on non-socket errors
             
-        except BrokenPipeError as e:
-            is_connected = False
-            log_console_and_discord("Connection failed: broken pipe (radio disconnected)", "red")
-            log_web("Connection failed: broken pipe (radio disconnected)", "red")
+            if connection_healthy:
+                time.sleep(10)  # Check more frequently to catch issues sooner
+            
+        except (BrokenPipeError, ConnectionResetError, OSError) as e:
+            log_console_and_discord("Connection failed: socket error (radio disconnected)", "red")
+            log_web("Connection failed: socket error (radio disconnected)", "red")
+            handle_socket_error()
+            
+            with connection_lock:
+                cleanup_interface()
             
             if not shutdown_event.is_set():
                 log_console_and_discord(f"Retrying in {backoff} seconds...", "yellow")
@@ -555,6 +624,9 @@ def monitor_connection():
             # Don't expose detailed error information
             log_console_and_discord("Connection failed: unable to connect to radio", "red")
             log_web("Connection failed: unable to connect to radio", "red")
+            
+            with connection_lock:
+                cleanup_interface()
             
             if not shutdown_event.is_set():
                 log_console_and_discord(f"Retrying in {backoff} seconds...", "yellow")
@@ -600,12 +672,4 @@ if __name__ == "__main__":
         shutdown_event.set()
     finally:
         # Clean shutdown
-        if interface:
-            try:
-                interface.close()
-            except BrokenPipeError:
-                # Expected when connection is already broken
-                pass
-            except Exception:
-                # Ignore other errors during cleanup
-                pass
+        cleanup_interface()
