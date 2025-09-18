@@ -6,6 +6,7 @@ import requests
 import threading
 import os
 import sys
+import io
 import sqlite3
 import queue
 from collections import defaultdict
@@ -1716,25 +1717,43 @@ def traceroute_worker():
                 
                 # Send the traceroute request using Meshtastic interface
                 # For now, trace back to the sender (which makes sense for testing connectivity)
-                interface.sendTraceRoute(dest=target_id, hopLimit=10)
                 
-                # Wait for the traceroute response using the library's built-in wait mechanism
-                # This will wait for the onResponseTraceRoute callback to be called
+                # Capture stdout to get the traceroute output
+                old_stdout = sys.stdout
+                captured_output = io.StringIO()
+                sys.stdout = captured_output
+                
                 try:
-                    # Use a wait factor of 2.5 for a reasonable timeout (usually this means 2.5 * some base timeout)
+                    interface.sendTraceRoute(dest=target_id, hopLimit=10)
+                    
+                    # Wait for the traceroute response using the library's built-in wait mechanism
+                    # This will wait for the onResponseTraceRoute callback to be called
                     interface.waitForTraceRoute(2.5)
                     
+                    # Restore stdout and get the captured output
+                    sys.stdout = old_stdout
+                    traceroute_output = captured_output.getvalue().strip()
+                    
                     # If we get here, the traceroute succeeded
-                    # The response was already printed to console by onResponseTraceRoute
-                    # Remove from pending and send success message
+                    # Remove from pending and send the traceroute result
                     if sender_id in pending_traceroutes:
                         del pending_traceroutes[sender_id]
                     
-                    success_msg = "Traceroute completed successfully (see console output for route details)"
-                    reply_messages = split_message(success_msg)
+                    if traceroute_output:
+                        # Send the actual traceroute output to the user
+                        result_msg = f"Traceroute result:\n{traceroute_output}"
+                        # Also log to console since we captured it
+                        print(traceroute_output)
+                    else:
+                        result_msg = "Traceroute completed successfully (no route data captured)"
+                    
+                    reply_messages = split_message(result_msg)
                     send_messages_async(interface, reply_messages, destination_id, sender_name, "Traceroute")
                     
                 except Exception as timeout_error:
+                    # Restore stdout in case of error
+                    sys.stdout = old_stdout
+                    
                     # Traceroute timed out or failed
                     if sender_id in pending_traceroutes:
                         del pending_traceroutes[sender_id]
@@ -1742,6 +1761,10 @@ def traceroute_worker():
                     error_msg = f"Traceroute timed out or failed: {str(timeout_error)[:50]}"
                     reply_messages = split_message(error_msg)
                     send_messages_async(interface, reply_messages, destination_id, sender_name, "Traceroute")
+                finally:
+                    # Ensure stdout is always restored
+                    sys.stdout = old_stdout
+                    captured_output.close()
                 
             except Exception as e:
                 # Clean up pending request on error
