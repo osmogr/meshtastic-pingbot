@@ -1629,6 +1629,7 @@ def get_help_response():
     return (
         f"Meshtastic Pingbot Help:\n\n"
         f"I respond to these triggers in channels and DMs: {', '.join(TRIGGERS)}\n\n"
+        f"Enhanced ping command: 'ping N' where N is 1-5 for multiple responses.\n\n"
         f"DM-only commands: help, /help - Show this help message. "
         f"about, /about - Show information about this bot.\n\n"
         f"When you send a trigger, I'll respond with connection info including RSSI, SNR, and hop count."
@@ -1640,6 +1641,7 @@ def get_about_response():
         f"Meshtastic Pingbot v1.0\n\n"
         f"I'm a simple ping-pong bot that helps test Meshtastic network connectivity. "
         f"Send me '{', '.join(TRIGGERS)}' and I'll respond with your connection quality metrics. "
+        f"Use 'ping N' (N=1-5) for multiple responses. "
         f"Features: RSSI and SNR reporting, Hop count tracking, Rate limiting (15s cooldown), "
         f"Channel and DM support. Built for the Meshtastic mesh networking community."
     )
@@ -1722,7 +1724,20 @@ def on_receive(packet=None, interface=None, **kwargs):
             return
 
         # Handle existing triggers (ping, hello, test) - work in both channels and DMs
-        if msg in TRIGGERS:
+        # Also handle "ping N" where N is 1-5 for multiple pong responses
+        ping_count = 1
+        if msg in TRIGGERS or (msg.startswith("ping ") and len(msg.split()) == 2):
+            # Check for "ping N" format
+            if msg.startswith("ping ") and len(msg.split()) == 2:
+                try:
+                    ping_count = int(msg.split()[1])
+                    if ping_count < 1 or ping_count > 5:
+                        ping_count = 1  # Default to 1 if out of range
+                except ValueError:
+                    ping_count = 1  # Default to 1 if not a valid number
+            elif msg not in TRIGGERS:
+                return  # Not a valid trigger
+                
             now = time.time()
             if sender_id in last_reply_time and (now - last_reply_time[sender_id]) < REPLY_COOLDOWN:
                 log_console_and_discord(f"Rate-limited reply to {sender}", "yellow")
@@ -1735,14 +1750,18 @@ def on_receive(packet=None, interface=None, **kwargs):
             hop_limit = packet.get("hopLimit", None)
             hop_count = hop_start - hop_limit if hop_start and hop_limit else None
 
-            reply = f"pong ({timestamp()}) RSSI: {rssi} SNR: {snr}"
-            if hop_count is not None:
-                reply += f" Hops: {hop_count}/{hop_start}"
+            # Generate multiple pong responses based on ping_count
+            reply_messages = []
+            for i in range(ping_count):
+                reply = f"pong ({timestamp()}) RSSI: {rssi} SNR: {snr}"
+                if hop_count is not None:
+                    reply += f" Hops: {hop_count}/{hop_start}"
+                
+                # Split each reply into multiple messages if needed
+                split_replies = split_message(reply)
+                reply_messages.extend(split_replies)
             
-            # Split the reply into multiple messages if needed (though ping responses are usually short)
-            reply_messages = split_message(reply)
-            
-            # Send reply asynchronously to avoid blocking message reception
+            # Send replies asynchronously to avoid blocking message reception
             send_messages_async(interface, reply_messages, packet["fromId"], sender, "Reply")
             
     except Exception as e:
