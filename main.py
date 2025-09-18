@@ -136,14 +136,27 @@ def update_node_info(node_id, node_info=None, packet_info=None):
             'updated_at': current_time
         }
         
+        # Debug: Count nodes being processed for first few
+        if not hasattr(update_node_info, 'debug_count'):
+            update_node_info.debug_count = 0
+        update_node_info.debug_count += 1
+        
         # Extract info from node_info (from nodedb)
         if node_info:
+            # Debug logging for first few nodes
+            if update_node_info.debug_count <= 5:
+                try:
+                    attrs = [attr for attr in dir(node_info) if not attr.startswith('_')]
+                    print(f"[DEBUG] Node {node_id} has attributes: {attrs}")
+                except:
+                    pass
+            
             if hasattr(node_info, 'user') and node_info.user:
-                if hasattr(node_info.user, 'longName'):
+                if hasattr(node_info.user, 'longName') and node_info.user.longName:
                     update_data['long_name'] = node_info.user.longName
-                if hasattr(node_info.user, 'shortName'):
+                if hasattr(node_info.user, 'shortName') and node_info.user.shortName:
                     update_data['short_name'] = node_info.user.shortName
-                if hasattr(node_info.user, 'macaddr'):
+                if hasattr(node_info.user, 'macaddr') and node_info.user.macaddr:
                     update_data['mac_addr'] = node_info.user.macaddr
                 if hasattr(node_info.user, 'hwModel'):
                     update_data['hw_model'] = node_info.user.hwModel
@@ -151,14 +164,24 @@ def update_node_info(node_id, node_info=None, packet_info=None):
                     update_data['role'] = node_info.user.role
                 if hasattr(node_info.user, 'isLicensed'):
                     update_data['is_licensed'] = node_info.user.isLicensed
+            else:
+                # Debug: Log when user data is missing
+                if update_node_info.debug_count <= 5:
+                    print(f"[DEBUG] Node {node_id} missing user data")
             
-            if hasattr(node_info, 'lastHeard'):
+            if hasattr(node_info, 'lastHeard') and node_info.lastHeard:
                 update_data['last_heard'] = node_info.lastHeard
-            if hasattr(node_info, 'snr'):
+            if hasattr(node_info, 'snr') and node_info.snr is not None:
                 update_data['snr'] = node_info.snr
+            if hasattr(node_info, 'rssi') and node_info.rssi is not None:
+                update_data['rssi'] = node_info.rssi
             if hasattr(node_info, 'deviceMetrics') and node_info.deviceMetrics:
                 # Extract additional metrics if available
                 pass
+        else:
+            # Debug: Log when node_info is completely missing
+            if update_node_info.debug_count <= 5:
+                print(f"[DEBUG] Node {node_id} has no node_info")
         
         # Extract info from packet
         if packet_info:
@@ -229,30 +252,279 @@ def update_node_info(node_id, node_info=None, packet_info=None):
 def download_nodedb(interface):
     """Download and store the current nodedb from the radio"""
     if not interface:
+        log_console_and_discord("No interface provided for nodedb download", "red")
+        log_web("No interface provided for nodedb download", "red")
         return False
     
     try:
         log_console_and_discord("Downloading nodedb from radio...", "cyan")
         log_web("Downloading nodedb from radio...", "cyan")
         
-        # Get node database from the radio
-        # Use the nodes property instead of getNodeDB() method which doesn't exist in newer API
-        nodes = interface.nodes
+        # Debug: Check interface properties
+        log_console_and_discord(f"Interface type: {type(interface)}", "cyan")
+        log_web(f"Interface type: {type(interface)}", "cyan")
+        
+        # Get node database from the radio using multiple methods
+        nodes = None
+        nodesByNum = None
+        
+        # Method 1: Use the nodes property (keyed by ID)
+        if hasattr(interface, 'nodes') and interface.nodes:
+            nodes = interface.nodes
+            log_console_and_discord(f"Found {len(nodes)} nodes via interface.nodes", "cyan")
+            log_web(f"Found {len(nodes)} nodes via interface.nodes", "cyan")
+        else:
+            log_console_and_discord("interface.nodes is empty or unavailable", "yellow")
+            log_web("interface.nodes is empty or unavailable", "yellow")
+        
+        # Method 2: Use nodesByNum property (keyed by node number)
+        if hasattr(interface, 'nodesByNum') and interface.nodesByNum:
+            nodesByNum = interface.nodesByNum
+            log_console_and_discord(f"Found {len(nodesByNum)} nodes via interface.nodesByNum", "cyan")
+            log_web(f"Found {len(nodesByNum)} nodes via interface.nodesByNum", "cyan")
+        else:
+            log_console_and_discord("interface.nodesByNum is empty or unavailable", "yellow")
+            log_web("interface.nodesByNum is empty or unavailable", "yellow")
+        
         node_count = 0
         
+        # Process nodes from the nodes property first (keyed by ID)
         if nodes:
+            log_console_and_discord(f"Processing {len(nodes)} nodes from interface.nodes...", "cyan")
+            log_web(f"Processing {len(nodes)} nodes from interface.nodes...", "cyan")
+            
             for node_id, node_info in nodes.items():
-                if update_node_info(node_id, node_info=node_info):
-                    node_count += 1
+                try:
+                    # Debug: Log node structure for first few nodes
+                    if node_count < 3:
+                        log_console_and_discord(f"Node {node_id} structure: {type(node_info)}", "cyan")
+                        log_web(f"Node {node_id} structure: {type(node_info)}", "cyan")
+                        if hasattr(node_info, '__dict__'):
+                            available_attrs = [attr for attr in dir(node_info) if not attr.startswith('_')]
+                            log_console_and_discord(f"Node {node_id} attributes: {available_attrs[:10]}", "cyan")
+                            log_web(f"Node {node_id} attributes: {available_attrs[:10]}", "cyan")
+                    
+                    if update_node_info(node_id, node_info=node_info):
+                        node_count += 1
+                except Exception as e:
+                    log_console_and_discord(f"Error processing node {node_id}: {e}", "yellow")
+                    log_web(f"Error processing node {node_id}: {e}", "yellow")
         
-        log_console_and_discord(f"Downloaded {node_count} nodes to database", "green")
-        log_web(f"Downloaded {node_count} nodes to database", "green")
+        # Process additional nodes from nodesByNum if they weren't already processed
+        if nodesByNum:
+            log_console_and_discord(f"Processing additional nodes from interface.nodesByNum...", "cyan")
+            log_web(f"Processing additional nodes from interface.nodesByNum...", "cyan")
+            
+            for node_num, node_info in nodesByNum.items():
+                try:
+                    # Convert node number to ID format if needed
+                    if isinstance(node_info, dict) and 'user' in node_info and 'id' in node_info['user']:
+                        node_id = node_info['user']['id']
+                    else:
+                        node_id = f"!{node_num:08x}"
+                    
+                    # Check if we already processed this node
+                    if nodes and node_id in nodes:
+                        continue
+                    
+                    # Convert dict format to object-like format for consistency
+                    class NodeInfoWrapper:
+                        def __init__(self, data):
+                            if isinstance(data, dict):
+                                # Handle dictionary format
+                                for key, value in data.items():
+                                    if key == 'user' and isinstance(value, dict):
+                                        # Convert user dict to object
+                                        user_obj = type('obj', (object,), {})()
+                                        for uk, uv in value.items():
+                                            setattr(user_obj, uk, uv)
+                                        setattr(self, key, user_obj)
+                                    else:
+                                        setattr(self, key, value)
+                            else:
+                                # Assume it's already an object
+                                self.__dict__.update(data.__dict__ if hasattr(data, '__dict__') else {})
+                    
+                    wrapped_info = NodeInfoWrapper(node_info)
+                    
+                    if update_node_info(node_id, node_info=wrapped_info):
+                        node_count += 1
+                        
+                except Exception as e:
+                    log_console_and_discord(f"Error processing nodesByNum entry {node_num}: {e}", "yellow")
+                    log_web(f"Error processing nodesByNum entry {node_num}: {e}", "yellow")
+        
+        # Log final results
+        if node_count == 0:
+            log_console_and_discord("Warning: No nodes were processed from nodedb", "yellow")
+            log_web("Warning: No nodes were processed from nodedb", "yellow")
+            
+            # Additional debugging: Try to access showNodes output for comparison
+            try:
+                if hasattr(interface, 'showNodes'):
+                    nodes_info = interface.showNodes()
+                    # Count lines to estimate node count (rough approximation)
+                    lines = nodes_info.split('\n')
+                    estimated_nodes = max(0, len(lines) - 3)  # Subtract header lines
+                    log_console_and_discord(f"showNodes() indicates approximately {estimated_nodes} nodes exist", "yellow")
+                    log_web(f"showNodes() indicates approximately {estimated_nodes} nodes exist", "yellow")
+            except Exception as e:
+                log_console_and_discord(f"Could not get showNodes info: {e}", "yellow")
+                log_web(f"Could not get showNodes info: {e}", "yellow")
+        else:
+            log_console_and_discord(f"Successfully downloaded {node_count} nodes to database", "green")
+            log_web(f"Successfully downloaded {node_count} nodes to database", "green")
+            # Log statistics after successful download
+            log_nodedb_statistics()
+        
         return True
         
     except Exception as e:
         log_console_and_discord(f"Failed to download nodedb: {e}", "red")
         log_web(f"Failed to download nodedb: {e}", "red")
+        import traceback
+        log_console_and_discord(f"Traceback: {traceback.format_exc()}", "red")
+        log_web(f"Traceback: {traceback.format_exc()}", "red")
         return False
+
+def request_nodedb_refresh(interface):
+    """Request a fresh nodedb download from the radio"""
+    if not interface:
+        return False
+    
+    try:
+        log_console_and_discord("Requesting fresh nodedb from radio...", "cyan")
+        log_web("Requesting fresh nodedb from radio...", "cyan")
+        
+        # Clear existing nodes to force fresh download
+        if hasattr(interface, 'nodes'):
+            interface.nodes = {}
+        if hasattr(interface, 'nodesByNum'):
+            interface.nodesByNum = {}
+        
+        # Trigger a fresh config request which should include nodedb
+        if hasattr(interface, '_startConfig'):
+            interface._startConfig()
+            log_console_and_discord("Triggered fresh config request", "cyan")
+            log_web("Triggered fresh config request", "cyan")
+            
+            # Wait for config to complete
+            import time
+            time.sleep(2)  # Give it a moment to start
+            
+            if hasattr(interface, 'waitForConfig'):
+                try:
+                    success = interface.waitForConfig()
+                    if success:
+                        log_console_and_discord("Config refresh completed successfully", "green")
+                        log_web("Config refresh completed successfully", "green")
+                        return True
+                    else:
+                        log_console_and_discord("Config refresh timed out", "yellow")
+                        log_web("Config refresh timed out", "yellow")
+                except Exception as e:
+                    log_console_and_discord(f"Error waiting for config: {e}", "yellow")
+                    log_web(f"Error waiting for config: {e}", "yellow")
+        
+        return False
+        
+    except Exception as e:
+        log_console_and_discord(f"Failed to request nodedb refresh: {e}", "red")
+        log_web(f"Failed to request nodedb refresh: {e}", "red")
+        return False
+
+def enhanced_download_nodedb(interface, retry_on_failure=True):
+    """Enhanced nodedb download with retry logic"""
+    if not interface:
+        return False
+    
+    # First attempt: Standard download
+    success = download_nodedb(interface)
+    
+    if not success and retry_on_failure:
+        log_console_and_discord("Initial nodedb download failed, attempting refresh...", "yellow")
+        log_web("Initial nodedb download failed, attempting refresh...", "yellow")
+        
+        # Try to request a fresh nodedb
+        if request_nodedb_refresh(interface):
+            # Retry download after refresh
+            success = download_nodedb(interface)
+    
+    return success
+
+def schedule_periodic_nodedb_refresh(interface, interval_hours=24):
+    """Schedule periodic nodedb refresh to ensure we have the latest data"""
+    import threading
+    import time
+    
+    def periodic_refresh():
+        while True:
+            try:
+                time.sleep(interval_hours * 3600)  # Convert hours to seconds
+                if interface and hasattr(interface, 'isConnected') and interface.isConnected.is_set():
+                    log_console_and_discord(f"Starting periodic nodedb refresh (every {interval_hours}h)", "cyan")
+                    log_web(f"Starting periodic nodedb refresh (every {interval_hours}h)", "cyan")
+                    enhanced_download_nodedb(interface)
+                    cleanup_old_nodes(30)
+            except Exception as e:
+                log_console_and_discord(f"Error in periodic nodedb refresh: {e}", "yellow")
+                log_web(f"Error in periodic nodedb refresh: {e}", "yellow")
+    
+    # Start the periodic refresh in a separate thread
+    refresh_thread = threading.Thread(target=periodic_refresh, daemon=True)
+    refresh_thread.start()
+    log_console_and_discord(f"Scheduled periodic nodedb refresh every {interval_hours} hours", "green")
+    log_web(f"Scheduled periodic nodedb refresh every {interval_hours} hours", "green")
+
+def get_nodedb_statistics():
+    """Get statistics about the current nodedb"""
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        
+        # Total nodes
+        cursor.execute('SELECT COUNT(*) FROM nodes')
+        total_nodes = cursor.fetchone()[0]
+        
+        # Nodes with complete information
+        cursor.execute('''
+            SELECT COUNT(*) FROM nodes 
+            WHERE long_name IS NOT NULL AND long_name != ""
+            AND short_name IS NOT NULL AND short_name != ""
+        ''')
+        complete_nodes = cursor.fetchone()[0]
+        
+        # Recent nodes (last 24 hours)
+        cutoff_time = int(time.time()) - (24 * 60 * 60)
+        cursor.execute('SELECT COUNT(*) FROM nodes WHERE updated_at > ?', (cutoff_time,))
+        recent_nodes = cursor.fetchone()[0]
+        
+        # Nodes with location data
+        cursor.execute('SELECT COUNT(*) FROM nodes WHERE last_heard IS NOT NULL')
+        nodes_with_location = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        stats = {
+            'total_nodes': total_nodes,
+            'complete_nodes': complete_nodes,
+            'recent_nodes': recent_nodes,
+            'nodes_with_location': nodes_with_location,
+            'completion_rate': (complete_nodes / total_nodes * 100) if total_nodes > 0 else 0
+        }
+        
+        return stats
+        
+    except Exception as e:
+        print(f"Error getting nodedb statistics: {e}")
+        return None
+
+def log_nodedb_statistics():
+    """Log current nodedb statistics"""
+    stats = get_nodedb_statistics()
+    if stats:
+        log_console_and_discord(f"NodeDB Stats: {stats['total_nodes']} total, {stats['complete_nodes']} complete ({stats['completion_rate']:.1f}%), {stats['recent_nodes']} recent", "cyan")
+        log_web(f"NodeDB Stats: {stats['total_nodes']} total, {stats['complete_nodes']} complete ({stats['completion_rate']:.1f}%), {stats['recent_nodes']} recent", "cyan")
 
 def cleanup_old_nodes(max_age_days=30):
     """Remove nodes that haven't been seen for more than max_age_days"""
@@ -950,6 +1222,83 @@ def health():
                                 connected=health_data["connected"],
                                 queued=health_data["queued"])
 
+@app.route("/nodedb/stats")
+def nodedb_stats():
+    """NodeDB statistics endpoint"""
+    from flask import jsonify, request
+    
+    stats = get_nodedb_statistics()
+    if not stats:
+        stats = {
+            'total_nodes': 0,
+            'complete_nodes': 0,
+            'recent_nodes': 0,
+            'nodes_with_location': 0,
+            'completion_rate': 0
+        }
+    
+    # Add connection status
+    stats['connected'] = is_connected
+    
+    # If this is an API request, return JSON
+    if request.headers.get('Accept') == 'application/json':
+        response = jsonify(stats)
+        response.headers['Content-Type'] = 'application/json'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        return response
+    
+    # Return simple text format for browser
+    return f"""NodeDB Statistics:
+Total Nodes: {stats['total_nodes']}
+Complete Nodes: {stats['complete_nodes']} ({stats['completion_rate']:.1f}%)
+Recent Nodes (24h): {stats['recent_nodes']}
+Nodes with Location: {stats['nodes_with_location']}
+Connected: {stats['connected']}"""
+
+@app.route("/nodedb/refresh", methods=['POST'])
+def nodedb_refresh():
+    """Manually trigger nodedb refresh"""
+    from flask import jsonify, request
+    
+    if not is_connected or not interface:
+        error_msg = "Radio not connected"
+        if request.headers.get('Accept') == 'application/json':
+            return jsonify({"success": False, "error": error_msg}), 400
+        return f"Error: {error_msg}", 400
+    
+    try:
+        # Trigger enhanced nodedb download
+        success = enhanced_download_nodedb(interface)
+        
+        if success:
+            # Get updated stats
+            stats = get_nodedb_statistics()
+            
+            result = {
+                "success": True,
+                "message": "NodeDB refresh completed successfully",
+                "stats": stats
+            }
+            
+            if request.headers.get('Accept') == 'application/json':
+                response = jsonify(result)
+                response.headers['Content-Type'] = 'application/json'
+                return response
+            
+            return f"Success: NodeDB refresh completed. Found {stats['total_nodes'] if stats else 0} nodes."
+        else:
+            error_msg = "NodeDB refresh failed"
+            if request.headers.get('Accept') == 'application/json':
+                return jsonify({"success": False, "error": error_msg}), 500
+            return f"Error: {error_msg}", 500
+            
+    except Exception as e:
+        error_msg = f"NodeDB refresh error: {e}"
+        if request.headers.get('Accept') == 'application/json':
+            return jsonify({"success": False, "error": error_msg}), 500
+        return f"Error: {error_msg}", 500
+
 @app.after_request
 def add_security_headers(response):
     """Add basic security headers"""
@@ -1463,12 +1812,14 @@ def monitor_connection():
                         
                         # Download nodedb after successful connection
                         try:
-                            download_nodedb(interface)
+                            enhanced_download_nodedb(interface)
                             # Clean up old nodes (older than 30 days)
                             cleanup_old_nodes(30)
+                            # Schedule periodic nodedb refresh (every 6 hours)
+                            schedule_periodic_nodedb_refresh(interface, 6)
                         except Exception as e:
-                            log_console_and_discord("Failed to download nodedb", "yellow")
-                            log_web("Failed to download nodedb", "yellow")
+                            log_console_and_discord(f"Failed to download nodedb: {e}", "yellow")
+                            log_web(f"Failed to download nodedb: {e}", "yellow")
                         
                         log_console_and_discord("Connected to Meshtastic radio", "green", True)
                         log_web("Connected to Meshtastic radio", "green", True)

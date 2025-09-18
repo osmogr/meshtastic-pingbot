@@ -9,10 +9,15 @@ This pingbot automatically responds to "ping", "hello", and "test" messages with
 
 The bot now maintains a SQLite database (`nodedb.sqlite`) to store information about all nodes in the mesh network:
 
-- **Automatic nodedb download**: When the radio connects, the bot downloads the complete node database
+- **Enhanced nodedb download**: Downloads the complete node database using multiple data sources for maximum coverage
+- **Dual-source processing**: Extracts nodes from both `interface.nodes` (by ID) and `interface.nodesByNum` (by number)
+- **Comprehensive data extraction**: Captures all available node information including names, hardware, role, licensing, and network metrics
+- **Automatic retry & refresh**: Retries failed downloads and periodically refreshes every 6 hours
+- **Real-time statistics**: Monitors database health with completion rates and data quality metrics
 - **Real-time updates**: Listens for `NODEINFO_APP` and `NEIGHBORINFO_APP` packets to keep node information current
 - **Smart name resolution**: Uses stored long/short names from the database instead of displaying raw radio IDs
 - **Automatic cleanup**: Removes nodes that haven't been seen for 30+ days to keep the database clean
+- **Advanced debugging**: Detailed logging helps diagnose nodedb download issues
 
 ### Commands
 
@@ -25,6 +30,12 @@ The bot now maintains a SQLite database (`nodedb.sqlite`) to store information a
 
 ### Recent Improvements
 
+- **Enhanced NodeDB Download**: Comprehensive node data extraction from multiple sources with retry logic
+- **Dual Source Node Processing**: Extracts nodes from both `interface.nodes` and `interface.nodesByNum` for maximum coverage
+- **Periodic NodeDB Refresh**: Automatic refresh every 6 hours to catch new nodes and updates
+- **Advanced Debugging**: Detailed logging of node data structures and extraction process
+- **Database Statistics**: Real-time monitoring of node database health and completion rates
+- **Robust Error Handling**: Individual node failures don't stop entire nodedb download
 - **SQLite Node Database**: Stores and manages node information with automatic updates from radio packets
 - **Enhanced Name Display**: Shows friendly node names (long/short names) instead of radio IDs in all logs and messages
 - **Separated Logging Functions**: Console and Discord logging are now separate functions (`log_console()`, `log_discord()`, `log_console_and_discord()`)
@@ -49,6 +60,10 @@ Set these environment variables:
 ## API Endpoints
 - `GET /`: Web interface showing live logs
 - `GET /health`: Health check returning `{"connected": true/false, "queued": N}`
+- `GET /nodes`: Node database browser with search and pagination
+- `GET /nodes/export`: Export node database as CSV
+- `GET /nodedb/stats`: NodeDB statistics and health metrics
+- `POST /nodedb/refresh`: Manually trigger nodedb refresh (requires radio connection)
 
 ## Usage
 ```bash
