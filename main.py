@@ -6,6 +6,7 @@ import requests
 import threading
 import os
 import sys
+import sqlite3
 from pubsub import pub
 from flask import Flask, render_template_string, request
 from flask_socketio import SocketIO
@@ -25,6 +26,9 @@ WHITE = "\033[97m"
 DEVICE_IP = os.environ.get("MESHTASTIC_IP", "192.168.1.50")
 DEVICE_PORT = int(os.environ.get("MESHTASTIC_PORT", "4403"))
 
+# --- Database configuration ---
+DATABASE_PATH = os.environ.get("DATABASE_PATH", "nodedb.sqlite")
+
 # --- Discord webhook ---
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
@@ -38,6 +42,239 @@ is_connected = False
 message_queue_count = 0
 interface = None
 local_radio_name = ""  # Local radio name (owner name or long name)
+
+# --- Database functions ---
+def init_database():
+    """Initialize the SQLite database for nodedb storage"""
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        
+        # Create nodes table to store node information
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS nodes (
+                node_id TEXT PRIMARY KEY,
+                short_name TEXT,
+                long_name TEXT,
+                mac_addr TEXT,
+                hw_model INTEGER,
+                role INTEGER,
+                last_heard INTEGER,
+                snr REAL,
+                rssi INTEGER,
+                hop_count INTEGER,
+                is_licensed BOOLEAN,
+                via_mqtt BOOLEAN,
+                created_at INTEGER,
+                updated_at INTEGER
+            )
+        ''')
+        
+        # Create an index on last_heard for efficient queries
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_nodes_last_heard ON nodes(last_heard)
+        ''')
+        
+        # Create an index on updated_at for efficient queries
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_nodes_updated_at ON nodes(updated_at)
+        ''')
+        
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Database initialization error: {e}")
+        return False
+
+def get_node_name(node_id):
+    """Get the display name for a node (long name preferred, fallback to short name, then node ID)"""
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT long_name, short_name FROM nodes WHERE node_id = ?
+        ''', (node_id,))
+        
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result:
+            long_name, short_name = result
+            if long_name and long_name.strip():
+                return long_name.strip()
+            elif short_name and short_name.strip():
+                return short_name.strip()
+        
+        return node_id
+    except Exception as e:
+        print(f"Database query error for node {node_id}: {e}")
+        return node_id
+
+def update_node_info(node_id, node_info=None, packet_info=None):
+    """Update node information in the database"""
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        
+        current_time = int(time.time())
+        
+        # Prepare data for update
+        update_data = {
+            'updated_at': current_time
+        }
+        
+        # Extract info from node_info (from nodedb)
+        if node_info:
+            if hasattr(node_info, 'user') and node_info.user:
+                if hasattr(node_info.user, 'longName'):
+                    update_data['long_name'] = node_info.user.longName
+                if hasattr(node_info.user, 'shortName'):
+                    update_data['short_name'] = node_info.user.shortName
+                if hasattr(node_info.user, 'macaddr'):
+                    update_data['mac_addr'] = node_info.user.macaddr
+                if hasattr(node_info.user, 'hwModel'):
+                    update_data['hw_model'] = node_info.user.hwModel
+                if hasattr(node_info.user, 'role'):
+                    update_data['role'] = node_info.user.role
+                if hasattr(node_info.user, 'isLicensed'):
+                    update_data['is_licensed'] = node_info.user.isLicensed
+            
+            if hasattr(node_info, 'lastHeard'):
+                update_data['last_heard'] = node_info.lastHeard
+            if hasattr(node_info, 'snr'):
+                update_data['snr'] = node_info.snr
+            if hasattr(node_info, 'deviceMetrics') and node_info.deviceMetrics:
+                # Extract additional metrics if available
+                pass
+        
+        # Extract info from packet
+        if packet_info:
+            if 'decoded' in packet_info and 'user' in packet_info['decoded']:
+                user = packet_info['decoded']['user']
+                if 'longName' in user:
+                    update_data['long_name'] = user['longName']
+                if 'shortName' in user:
+                    update_data['short_name'] = user['shortName']
+                if 'macaddr' in user:
+                    update_data['mac_addr'] = user['macaddr']
+                if 'hwModel' in user:
+                    update_data['hw_model'] = user['hwModel']
+                if 'role' in user:
+                    update_data['role'] = user['role']
+                if 'isLicensed' in user:
+                    update_data['is_licensed'] = user['isLicensed']
+            
+            # Extract packet metadata
+            if 'rxMetadata' in packet_info and packet_info['rxMetadata']:
+                metadata = packet_info['rxMetadata'][0]
+                if 'rssi' in metadata:
+                    update_data['rssi'] = metadata['rssi']
+                if 'snr' in metadata:
+                    update_data['snr'] = metadata['snr']
+            elif 'rxRssi' in packet_info:
+                update_data['rssi'] = packet_info['rxRssi']
+                if 'rxSnr' in packet_info:
+                    update_data['snr'] = packet_info['rxSnr']
+            
+            if 'hopStart' in packet_info and 'hopLimit' in packet_info:
+                hop_start = packet_info.get('hopStart')
+                hop_limit = packet_info.get('hopLimit')
+                if hop_start and hop_limit:
+                    update_data['hop_count'] = hop_start - hop_limit
+            
+            if 'viaMqtt' in packet_info:
+                update_data['via_mqtt'] = packet_info['viaMqtt']
+        
+        # Check if node exists
+        cursor.execute('SELECT node_id FROM nodes WHERE node_id = ?', (node_id,))
+        exists = cursor.fetchone()
+        
+        if exists:
+            # Update existing node
+            if update_data:
+                set_clause = ', '.join([f"{key} = ?" for key in update_data.keys()])
+                query = f"UPDATE nodes SET {set_clause} WHERE node_id = ?"
+                values = list(update_data.values()) + [node_id]
+                cursor.execute(query, values)
+        else:
+            # Insert new node
+            update_data['node_id'] = node_id
+            update_data['created_at'] = current_time
+            
+            columns = ', '.join(update_data.keys())
+            placeholders = ', '.join(['?' for _ in update_data])
+            query = f"INSERT INTO nodes ({columns}) VALUES ({placeholders})"
+            cursor.execute(query, list(update_data.values()))
+        
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Database update error for node {node_id}: {e}")
+        return False
+
+def download_nodedb(interface):
+    """Download and store the current nodedb from the radio"""
+    if not interface:
+        return False
+    
+    try:
+        log_console_and_discord("Downloading nodedb from radio...", "cyan")
+        log_web("Downloading nodedb from radio...", "cyan")
+        
+        # Get node database from the radio
+        nodes = interface.getNodeDB()
+        node_count = 0
+        
+        if nodes:
+            for node_id, node_info in nodes.items():
+                if update_node_info(node_id, node_info=node_info):
+                    node_count += 1
+        
+        log_console_and_discord(f"Downloaded {node_count} nodes to database", "green")
+        log_web(f"Downloaded {node_count} nodes to database", "green")
+        return True
+        
+    except Exception as e:
+        log_console_and_discord(f"Failed to download nodedb: {e}", "red")
+        log_web(f"Failed to download nodedb: {e}", "red")
+        return False
+
+def cleanup_old_nodes(max_age_days=30):
+    """Remove nodes that haven't been seen for more than max_age_days"""
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        
+        cutoff_time = int(time.time()) - (max_age_days * 24 * 60 * 60)
+        
+        # Count nodes to be removed
+        cursor.execute('''
+            SELECT COUNT(*) FROM nodes 
+            WHERE updated_at < ? OR updated_at IS NULL
+        ''', (cutoff_time,))
+        
+        old_count = cursor.fetchone()[0]
+        
+        if old_count > 0:
+            # Remove old nodes
+            cursor.execute('''
+                DELETE FROM nodes 
+                WHERE updated_at < ? OR updated_at IS NULL
+            ''', (cutoff_time,))
+            
+            conn.commit()
+            log_console_and_discord(f"Cleaned up {old_count} old nodes from database", "yellow")
+            log_web(f"Cleaned up {old_count} old nodes from database", "yellow")
+        
+        conn.close()
+        return True
+    except Exception as e:
+        log_console_and_discord(f"Database cleanup error: {e}", "red")
+        log_web(f"Database cleanup error: {e}", "red")
+        return False
 
 HTML_TEMPLATE = """
 <!doctype html>
@@ -199,10 +436,24 @@ def extract_rssi_snr(packet):
     return rssi if rssi is not None else "N/A", snr if snr is not None else "N/A"
 
 def get_sender_name(packet):
+    """Get sender name, preferring database lookup over packet data"""
+    sender_id = packet.get("fromId", "Unknown")
+    
+    # First try to get name from database
+    db_name = get_node_name(sender_id)
+    if db_name != sender_id:  # Database returned a name, not just the ID
+        return db_name
+    
+    # Fallback to packet data if not in database
     if "decoded" in packet and "user" in packet["decoded"]:
         user = packet["decoded"]["user"]
-        return user.get("longName") or user.get("shortName")
-    return packet.get("fromId", "Unknown")
+        name = user.get("longName") or user.get("shortName")
+        if name:
+            # Update database with this new info
+            update_node_info(sender_id, packet_info=packet)
+            return name
+    
+    return sender_id
 
 def get_message_origin(packet):
     """Determine if message is from channel or direct message"""
@@ -385,7 +636,34 @@ def get_about_response():
 def on_receive(packet=None, interface=None, **kwargs):
     global message_queue_count, is_connected
     
-    if not packet or "decoded" not in packet or "text" not in packet["decoded"]:
+    if not packet:
+        return
+    
+    # Handle different packet types
+    packet_type = packet.get("decoded", {}).get("portnum")
+    
+    # Update database for NODEINFO_APP packets
+    if packet_type == meshtastic.portnums_pb2.NODEINFO_APP:
+        sender_id = packet.get("fromId")
+        if sender_id:
+            update_node_info(sender_id, packet_info=packet)
+            sender_name = get_node_name(sender_id)
+            log_console_and_discord(f"Updated node info for {sender_name} ({sender_id})", "blue")
+            log_web(f"Updated node info for {sender_name} ({sender_id})", "blue")
+        return
+    
+    # Update database for NEIGHBORINFO_APP packets
+    if packet_type == meshtastic.portnums_pb2.NEIGHBORINFO_APP:
+        sender_id = packet.get("fromId")
+        if sender_id:
+            update_node_info(sender_id, packet_info=packet)
+            sender_name = get_node_name(sender_id)
+            log_console_and_discord(f"Updated neighbor info for {sender_name} ({sender_id})", "blue")
+            log_web(f"Updated neighbor info for {sender_name} ({sender_id})", "blue")
+        return
+    
+    # Handle text messages (existing functionality)
+    if "decoded" not in packet or "text" not in packet["decoded"]:
         return
     
     # Basic input validation
@@ -397,6 +675,10 @@ def on_receive(packet=None, interface=None, **kwargs):
         sender = get_sender_name(packet)
         sender_id = packet.get("fromId", sender)
         message_origin = get_message_origin(packet)
+        
+        # Update database with any user info from this packet
+        if sender_id:
+            update_node_info(sender_id, packet_info=packet)
         
         # Sanitize sender name for logging
         if sender and len(sender) > 50:
@@ -564,6 +846,15 @@ def monitor_connection():
                             log_web("Failed to retrieve local radio name", "yellow")
                             local_radio_name = ""
                         
+                        # Download nodedb after successful connection
+                        try:
+                            download_nodedb(interface)
+                            # Clean up old nodes (older than 30 days)
+                            cleanup_old_nodes(30)
+                        except Exception as e:
+                            log_console_and_discord("Failed to download nodedb", "yellow")
+                            log_web("Failed to download nodedb", "yellow")
+                        
                         log_console_and_discord("Connected to Meshtastic radio", "green", True)
                         log_web("Connected to Meshtastic radio", "green", True)
                         
@@ -690,6 +981,11 @@ if hasattr(threading, 'excepthook'):
 # --- Main ---
 if __name__ == "__main__":
     try:
+        # Initialize database
+        if not init_database():
+            print("Failed to initialize database, exiting...")
+            sys.exit(1)
+        
         interface = connect_radio()
         log_console("Starting web server...", "green", True)
         log_web("Starting web server...", "green", True)

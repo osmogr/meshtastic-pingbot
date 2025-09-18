@@ -5,6 +5,15 @@ Meshtastic Pingbot
 
 This pingbot automatically responds to "ping", "hello", and "test" messages with connection information including RSSI, SNR, and hop count.
 
+### SQLite Database Integration
+
+The bot now maintains a SQLite database (`nodedb.sqlite`) to store information about all nodes in the mesh network:
+
+- **Automatic nodedb download**: When the radio connects, the bot downloads the complete node database
+- **Real-time updates**: Listens for `NODEINFO_APP` and `NEIGHBORINFO_APP` packets to keep node information current
+- **Smart name resolution**: Uses stored long/short names from the database instead of displaying raw radio IDs
+- **Automatic cleanup**: Removes nodes that haven't been seen for 30+ days to keep the database clean
+
 ### Commands
 
 **Triggers (work in channels and DMs):**
@@ -16,6 +25,8 @@ This pingbot automatically responds to "ping", "hello", and "test" messages with
 
 ### Recent Improvements
 
+- **SQLite Node Database**: Stores and manages node information with automatic updates from radio packets
+- **Enhanced Name Display**: Shows friendly node names (long/short names) instead of radio IDs in all logs and messages
 - **Separated Logging Functions**: Console and Discord logging are now separate functions (`log_console()`, `log_discord()`, `log_console_and_discord()`)
 - **TCP Reconnection**: Automatic reconnection with exponential backoff when connection is lost
 - **Health Endpoint**: `/health` endpoint returns JSON with connection status and message queue count
@@ -32,6 +43,7 @@ This pingbot automatically responds to "ping", "hello", and "test" messages with
 Set these environment variables:
 - `DEVICE_IP`: IP address of Meshtastic device (default: "192.168.1.50")
 - `DEVICE_PORT`: TCP port (default: 4403) 
+- `DATABASE_PATH`: Path to SQLite database file (default: "nodedb.sqlite")
 - `DISCORD_WEBHOOK_URL`: Discord webhook URL for notifications (optional)
 
 ## API Endpoints
