@@ -14,8 +14,15 @@ BLUE = "\033[94m"
 WHITE = "\033[97m"
 
 # --- Meshtastic device ---
+# Connection type: "tcp" or "serial"
+CONNECTION_TYPE = os.environ.get("CONNECTION_TYPE", "tcp").lower()
+
+# TCP connection settings
 DEVICE_IP = os.environ.get("MESHTASTIC_IP", "192.168.1.50")
 DEVICE_PORT = int(os.environ.get("MESHTASTIC_PORT", "4403"))
+
+# Serial connection settings
+SERIAL_DEVICE = os.environ.get("SERIAL_DEVICE", None)  # e.g., "/dev/ttyUSB0" on Linux or "COM3" on Windows
 
 # --- Database configuration ---
 DATABASE_PATH = os.environ.get("DATABASE_PATH", "nodedb.sqlite")

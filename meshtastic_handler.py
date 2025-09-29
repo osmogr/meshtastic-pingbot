@@ -2,12 +2,13 @@
 
 import meshtastic
 import meshtastic.tcp_interface
+import meshtastic.serial_interface
 import datetime
 import time
 import threading
 import sys
 from pubsub import pub
-from config import DEVICE_IP, REPLY_COOLDOWN, TRIGGERS, DM_COMMANDS
+from config import CONNECTION_TYPE, DEVICE_IP, SERIAL_DEVICE, REPLY_COOLDOWN, TRIGGERS, DM_COMMANDS
 from database import update_node_info, get_node_name
 from logging_utils import log_console_and_discord, log_web, timestamp, set_local_radio_name
 from traceroute import (split_message, send_messages_async, queue_traceroute, 
@@ -442,7 +443,21 @@ def monitor_connection():
                     cleanup_interface()
                     
                     try:
-                        interface = meshtastic.tcp_interface.TCPInterface(hostname=DEVICE_IP)
+                        # Create interface based on connection type
+                        if CONNECTION_TYPE == "serial":
+                            if SERIAL_DEVICE:
+                                log_console_and_discord(f"Connecting via serial to {SERIAL_DEVICE}...", "yellow")
+                                log_web(f"Connecting via serial to {SERIAL_DEVICE}...", "yellow")
+                                interface = meshtastic.serial_interface.SerialInterface(devPath=SERIAL_DEVICE)
+                            else:
+                                log_console_and_discord("Connecting via serial (auto-detect)...", "yellow")
+                                log_web("Connecting via serial (auto-detect)...", "yellow")
+                                interface = meshtastic.serial_interface.SerialInterface()
+                        else:  # tcp
+                            log_console_and_discord(f"Connecting via TCP to {DEVICE_IP}...", "yellow")
+                            log_web(f"Connecting via TCP to {DEVICE_IP}...", "yellow")
+                            interface = meshtastic.tcp_interface.TCPInterface(hostname=DEVICE_IP)
+                        
                         pub.subscribe(on_receive, "meshtastic.receive")
                         is_connected = True
                         backoff = 2  # Reset backoff on successful connection
