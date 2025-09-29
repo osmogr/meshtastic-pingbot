@@ -64,6 +64,10 @@ db.sqlite3-journal
 # Meshtastic nodedb database
 nodedb.sqlite
 
+# Backup files from refactoring
+main_original.py
+main_refactored.py
+
 # Flask stuff:
 instance/
 .webassets-cache
