@@ -43,6 +43,7 @@ The bot now maintains a SQLite database (`nodedb.sqlite`) to store information a
 - **SQLite Node Database**: Stores and manages node information with automatic updates from radio packets
 - **Enhanced Name Display**: Shows friendly node names (long/short names) instead of radio IDs in all logs and messages
 - **Separated Logging Functions**: Console and Discord logging are now separate functions (`log_console()`, `log_discord()`, `log_console_and_discord()`)
+- **Serial and TCP Connection Support**: Connect via TCP network or serial USB connection with automatic device detection
 - **TCP Reconnection**: Automatic reconnection with exponential backoff when connection is lost
 - **Health Endpoint**: `/health` endpoint returns JSON with connection status and message queue count
 - **Security Enhancements**: Input validation, security headers, and improved error handling
@@ -56,8 +57,18 @@ The bot now maintains a SQLite database (`nodedb.sqlite`) to store information a
  
 ## Configuration
 Set these environment variables:
+
+### Connection Settings
+- `CONNECTION_TYPE`: Connection type - "tcp" or "serial" (default: "tcp")
+
+### TCP Connection (when CONNECTION_TYPE="tcp")
 - `DEVICE_IP`: IP address of Meshtastic device (default: "192.168.1.50")
-- `DEVICE_PORT`: TCP port (default: 4403) 
+- `DEVICE_PORT`: TCP port (default: 4403)
+
+### Serial Connection (when CONNECTION_TYPE="serial")
+- `SERIAL_DEVICE`: Serial device path, e.g., "/dev/ttyUSB0" on Linux or "COM3" on Windows (default: None - auto-detect)
+
+### Other Settings 
 - `DATABASE_PATH`: Path to SQLite database file (default: "nodedb.sqlite")
 - `DISCORD_WEBHOOK_URL`: Discord webhook URL for notifications (optional)
 
@@ -70,12 +81,27 @@ Set these environment variables:
 - `POST /nodedb/refresh`: Manually trigger nodedb refresh (requires radio connection)
 
 ## Usage
+
+### Basic TCP Usage (default)
 ```bash
 git clone https://github.com/osmogr/meshtastic-pingbot
 cd meshtastic-pingbot
 python3 -m venv .venv
 source venv/bin/activate
 pip3 install -r requirements.txt
+python main.py
+```
+
+### Serial Connection Usage
+```bash
+# With specific serial device
+export CONNECTION_TYPE=serial
+export SERIAL_DEVICE=/dev/ttyUSB0  # Linux/Mac example
+# export SERIAL_DEVICE=COM3        # Windows example
+python main.py
+
+# Or with auto-detection (will find first available Meshtastic device)
+export CONNECTION_TYPE=serial
 python main.py
 ```
 
