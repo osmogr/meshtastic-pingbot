@@ -351,54 +351,27 @@ def on_receive(packet=None, interface=None, **kwargs):
     
     # Handle different packet types
     packet_type = packet.get("decoded", {}).get("portnum")
+    sender_id = packet.get("fromId")
     
-    # NOTE: Traceroute responses are now handled by custom callback in traceroute.py
-    # The old handler is kept here but will not be triggered since we use a custom onResponse callback
-    # if packet_type in [meshtastic.portnums_pb2.ROUTING_APP, meshtastic.portnums_pb2.TRACEROUTE_APP]:
-    #     sender_id = packet.get("fromId")
-    #     if sender_id and sender_id in pending_traceroutes:
-    #         handle_traceroute_response_packet(packet, interface)
-    #     return
-    
-    # Update database for NODEINFO_APP packets
-    if packet_type == meshtastic.portnums_pb2.NODEINFO_APP:
-        sender_id = packet.get("fromId")
-        if sender_id:
-            update_node_info(sender_id, packet_info=packet)
-            sender_name = get_node_name(sender_id)
+    # Update database for ALL packets that have a sender ID
+    # This ensures we capture telemetry, position, and any other data from any packet type
+    if sender_id:
+        update_node_info(sender_id, packet_info=packet)
+        sender_name = get_node_name(sender_id)
+        
+        # Log specific packet types with appropriate messages
+        if packet_type == meshtastic.portnums_pb2.NODEINFO_APP:
             log_console_and_web(f"Updated node info for {sender_name} ({sender_id})", "blue")
             log_web(f"Updated node info for {sender_name} ({sender_id})", "blue")
-        return
-    
-    # Update database for NEIGHBORINFO_APP packets
-    if packet_type == meshtastic.portnums_pb2.NEIGHBORINFO_APP:
-        sender_id = packet.get("fromId")
-        if sender_id:
-            update_node_info(sender_id, packet_info=packet)
-            sender_name = get_node_name(sender_id)
+        elif packet_type == meshtastic.portnums_pb2.NEIGHBORINFO_APP:
             log_console_and_web(f"Updated neighbor info for {sender_name} ({sender_id})", "blue")
             log_web(f"Updated neighbor info for {sender_name} ({sender_id})", "blue")
-        return
-    
-    # Update database for TELEMETRY_APP packets
-    if packet_type == meshtastic.portnums_pb2.TELEMETRY_APP:
-        sender_id = packet.get("fromId")
-        if sender_id:
-            update_node_info(sender_id, packet_info=packet)
-            sender_name = get_node_name(sender_id)
+        elif packet_type == meshtastic.portnums_pb2.TELEMETRY_APP:
             log_console_and_web(f"Updated telemetry for {sender_name} ({sender_id})", "blue")
             log_web(f"Updated telemetry for {sender_name} ({sender_id})", "blue")
-        return
-    
-    # Update database for POSITION_APP packets
-    if packet_type == meshtastic.portnums_pb2.POSITION_APP:
-        sender_id = packet.get("fromId")
-        if sender_id:
-            update_node_info(sender_id, packet_info=packet)
-            sender_name = get_node_name(sender_id)
+        elif packet_type == meshtastic.portnums_pb2.POSITION_APP:
             log_console_and_web(f"Updated position for {sender_name} ({sender_id})", "blue")
             log_web(f"Updated position for {sender_name} ({sender_id})", "blue")
-        return
     
     # Handle text messages (existing functionality)
     if "decoded" not in packet or "text" not in packet["decoded"]:
@@ -413,10 +386,6 @@ def on_receive(packet=None, interface=None, **kwargs):
         sender = get_sender_name(packet)
         sender_id = packet.get("fromId", sender)
         message_origin = get_message_origin(packet)
-        
-        # Update database with any user info from this packet
-        if sender_id:
-            update_node_info(sender_id, packet_info=packet)
         
         # Sanitize sender name for logging
         if sender and len(sender) > 50:
