@@ -249,14 +249,16 @@ def traceroute_worker():
             
             try:
                 # Store the pending request so we can match the response
+                # Store both the destination_id (for reply) and target_node_id (for matching response)
                 pending_traceroutes[sender_id] = {
                     'destination_id': destination_id,
                     'sender_name': sender_name,
+                    'target_node_id': target_id,  # This is the node we're tracing to
                     'timestamp': time.time()
                 }
                 
                 # Send the traceroute request using Meshtastic interface
-                # For now, trace back to the sender (which makes sense for testing connectivity)
+                # We trace to the sender (which makes sense for testing connectivity)
                 
                 try:
                     interface.sendTraceRoute(dest=target_id, hopLimit=10)

@@ -159,16 +159,32 @@ def get_about_response():
 def handle_traceroute_response_packet(packet, interface):
     """Handle traceroute response packets"""
     try:
-        sender_id = packet.get("fromId")
-        if sender_id not in pending_traceroutes:
+        # The traceroute response comes from the destination node
+        from_id = packet.get("fromId")
+        
+        # Check if this is a response to any of our pending traceroutes
+        # We need to match based on the destination we sent to, not the sender
+        matching_request = None
+        matching_sender_id = None
+        
+        for sender_id, pending_request in list(pending_traceroutes.items()):
+            # The target_id in the request is where we sent the traceroute to
+            # and from_id should match that
+            target_node_id = pending_request.get('target_node_id')
+            if target_node_id and target_node_id == from_id:
+                matching_request = pending_request
+                matching_sender_id = sender_id
+                break
+        
+        if not matching_request:
+            # Not a response to our traceroute request
             return
             
-        pending_request = pending_traceroutes[sender_id]
-        destination_id = pending_request['destination_id']
-        sender_name = pending_request['sender_name']
+        destination_id = matching_request['destination_id']
+        sender_name = matching_request['sender_name']
         
         # Remove from pending requests
-        del pending_traceroutes[sender_id]
+        del pending_traceroutes[matching_sender_id]
         
         # Extract information from the packet
         decoded = packet.get("decoded", {})
@@ -178,46 +194,134 @@ def handle_traceroute_response_packet(packet, interface):
         result_lines = []
         result_lines.append(f"Traceroute to {sender_name}:")
         
-        # Add basic packet info
+        # Parse RouteDiscovery payload for TRACEROUTE_APP packets
+        if packet_type == meshtastic.portnums_pb2.TRACEROUTE_APP:
+            try:
+                from meshtastic import mesh_pb2
+                import google.protobuf.json_format
+                
+                payload = decoded.get("payload", b"")
+                if payload:
+                    route_discovery = mesh_pb2.RouteDiscovery()
+                    route_discovery.ParseFromString(payload)
+                    route_dict = google.protobuf.json_format.MessageToDict(route_discovery)
+                    
+                    # Format the route towards destination
+                    route_list = route_dict.get("route", [])
+                    snr_towards = route_dict.get("snrTowards", [])
+                    
+                    if route_list or snr_towards:
+                        result_lines.append("\nRoute traced:")
+                        
+                        # Build route string with node IDs
+                        route_str_parts = []
+                        
+                        # Start with us (the bot)
+                        route_str_parts.append("Bot")
+                        
+                        # Add intermediate hops
+                        UNK_SNR = -128
+                        for idx, node_num in enumerate(route_list):
+                            # Try to get node name from database
+                            from database import get_node_name_by_num
+                            node_name = None
+                            try:
+                                node_name = get_node_name_by_num(node_num)
+                            except:
+                                pass
+                            
+                            if not node_name or node_name == str(node_num):
+                                node_name = f"!{node_num:08x}"
+                            
+                            # Add SNR if available
+                            snr_str = ""
+                            if idx < len(snr_towards) and snr_towards[idx] != UNK_SNR:
+                                snr_val = snr_towards[idx] / 4.0
+                                snr_str = f" ({snr_val:.1f}dB)"
+                            
+                            route_str_parts.append(f"{node_name}{snr_str}")
+                        
+                        # End with destination
+                        if snr_towards:
+                            last_snr_idx = len(snr_towards) - 1
+                            if last_snr_idx >= 0 and snr_towards[last_snr_idx] != UNK_SNR:
+                                snr_val = snr_towards[last_snr_idx] / 4.0
+                                result_lines.append(" -> ".join(route_str_parts) + f" -> {sender_name} ({snr_val:.1f}dB)")
+                            else:
+                                result_lines.append(" -> ".join(route_str_parts) + f" -> {sender_name}")
+                        else:
+                            result_lines.append(" -> ".join(route_str_parts) + f" -> {sender_name}")
+                        
+                        # Add hop count
+                        hop_count = len(route_list)
+                        if hop_count == 0:
+                            result_lines.append("Direct connection (0 hops)")
+                        else:
+                            result_lines.append(f"Total hops: {hop_count}")
+                        
+                        # Check for return route
+                        route_back = route_dict.get("routeBack", [])
+                        snr_back = route_dict.get("snrBack", [])
+                        if route_back or snr_back:
+                            result_lines.append("\nReturn route:")
+                            back_parts = [sender_name]
+                            
+                            for idx, node_num in enumerate(route_back):
+                                from database import get_node_name_by_num
+                                node_name = None
+                                try:
+                                    node_name = get_node_name_by_num(node_num)
+                                except:
+                                    pass
+                                
+                                if not node_name or node_name == str(node_num):
+                                    node_name = f"!{node_num:08x}"
+                                
+                                snr_str = ""
+                                if idx < len(snr_back) and snr_back[idx] != UNK_SNR:
+                                    snr_val = snr_back[idx] / 4.0
+                                    snr_str = f" ({snr_val:.1f}dB)"
+                                
+                                back_parts.append(f"{node_name}{snr_str}")
+                            
+                            back_parts.append("Bot")
+                            result_lines.append(" -> ".join(back_parts))
+                    else:
+                        result_lines.append("Direct connection (0 hops)")
+                else:
+                    result_lines.append("No route data in response")
+                    
+            except Exception as parse_error:
+                log_console_and_discord(f"Error parsing traceroute data: {parse_error}", "yellow")
+                result_lines.append("Traceroute completed (parse error)")
+        
+        # Add basic packet info for any response type
         hop_start = packet.get("hopStart", 0)
         hop_limit = packet.get("hopLimit", 0)
         hops_away = max(0, hop_start - hop_limit)
         if hops_away > 0:
-            result_lines.append(f"Hops away: {hops_away}")
+            result_lines.append(f"\nPacket hops: {hops_away}")
         
         # Add signal quality if available
         rssi = packet.get("rxRssi")
         snr = packet.get("rxSnr")
-        if rssi is not None:
-            result_lines.append(f"RSSI: {rssi}dBm")
-        if snr is not None:
-            result_lines.append(f"SNR: {snr:.2f}dB")
-            
-        # Add routing info based on packet type
-        if packet_type == meshtastic.portnums_pb2.ROUTING_APP:
-            routing_data = decoded.get("routing", {})
-            if routing_data:
-                result_lines.append(f"Routing data: {routing_data}")
-            else:
-                result_lines.append("Route discovery successful")
-        elif packet_type == meshtastic.portnums_pb2.TRACEROUTE_APP:
-            # Handle TRACEROUTE_APP specific data
-            trace_data = decoded.get("data", b"")
-            if trace_data:
-                result_lines.append(f"Trace data received: {len(trace_data)} bytes")
-            result_lines.append("Traceroute response received")
-        else:
-            result_lines.append("Response received")
+        if rssi is not None or snr is not None:
+            signal_parts = []
+            if rssi is not None:
+                signal_parts.append(f"RSSI: {rssi}dBm")
+            if snr is not None:
+                signal_parts.append(f"SNR: {snr:.2f}dB")
+            result_lines.append(", ".join(signal_parts))
             
         # Add timestamp
         current_timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-        result_lines.append(f"Completed at: {current_timestamp}")
+        result_lines.append(f"\nCompleted at: {current_timestamp}")
             
         result_msg = "\n".join(result_lines)
         
         # Log the result to console
-        log_console_and_discord(f"Traceroute result for {sender_name}: {result_msg}", "green")
-        log_web(f"Traceroute result for {sender_name}: {result_msg}", "green")
+        log_console_and_discord(f"Traceroute completed for {sender_name}", "green")
+        log_web(f"Traceroute completed for {sender_name}", "green")
         
         # Send the result back to the user
         reply_messages = split_message(result_msg)
