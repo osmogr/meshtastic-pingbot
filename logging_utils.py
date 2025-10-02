@@ -55,6 +55,19 @@ def log_console_and_discord(msg, color="white", bold=False):
     log_discord(msg)
 
 
+def log_console_and_web(msg, color="white", bold=False):
+    """Log message to console and web only (NOT Discord)"""
+    log_console(msg, color, bold)
+    log_web(msg, color, bold)
+
+
+def log_console_web_and_discord(msg, color="white", bold=False):
+    """Log message to console, web, and Discord (for bot messages and public chat)"""
+    log_console(msg, color, bold)
+    log_web(msg, color, bold)
+    log_discord(msg)
+
+
 def log_web(msg, color="white", bold=False):
     """Log message to web interface"""
     if socketio is None:

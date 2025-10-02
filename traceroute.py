@@ -81,7 +81,7 @@ def send_multiple_messages(interface, messages, destination_id):
     Send multiple messages in sequence with proper error handling.
     Returns True if all messages were sent successfully, False otherwise.
     """
-    from logging_utils import log_console_and_discord, log_web
+    from logging_utils import log_console_and_web, log_web
     import time
     
     # Import these dynamically to avoid circular imports
@@ -103,8 +103,7 @@ def send_multiple_messages(interface, messages, destination_id):
     is_connected, message_queue_count = get_connection_status()
     
     if not interface or not is_connected:
-        log_console_and_discord("Cannot send messages: not connected", "red")
-        log_web("Cannot send messages: not connected", "red")
+        log_console_and_web("Cannot send messages: not connected", "red")
         return False
     
     success_count = 0
@@ -123,8 +122,7 @@ def send_multiple_messages(interface, messages, destination_id):
                 
         except (BrokenPipeError, ConnectionResetError, OSError) as e:
             update_message_queue_count(-1)
-            log_console_and_discord(f"Failed to send message {i}/{total_messages}: socket error (connection lost)", "red")
-            log_web(f"Failed to send message {i}/{total_messages}: socket error (connection lost)", "red")
+            log_console_and_web(f"Failed to send message {i}/{total_messages}: socket error (connection lost)", "red")
             handle_socket_error()
             # Trigger immediate cleanup in background
             with connection_lock:
@@ -132,8 +130,7 @@ def send_multiple_messages(interface, messages, destination_id):
             return False
         except Exception as e:
             update_message_queue_count(-1)
-            log_console_and_discord(f"Failed to send message {i}/{total_messages}: operation error", "red")
-            log_web(f"Failed to send message {i}/{total_messages}: operation error", "red")
+            log_console_and_web(f"Failed to send message {i}/{total_messages}: operation error", "red")
             # Don't mark as disconnected for non-socket errors, but still fail the send
             return False
     
@@ -144,7 +141,7 @@ def send_messages_async(interface, messages, destination_id, sender_name, messag
     """
     Send messages asynchronously in a separate thread to avoid blocking message reception.
     """
-    from logging_utils import log_console_and_discord, log_web
+    from logging_utils import log_console_web_and_discord
     
     def send_task():
         try:
@@ -155,16 +152,13 @@ def send_messages_async(interface, messages, destination_id, sender_name, messag
                     console = f"{message_type} -> {sender_name}: {messages[0]}"
                 else:
                     console = f"{message_type} -> {sender_name}: {len(messages)} message{'s' if len(messages) > 1 else ''}"
-                log_console_and_discord(console, "green")
-                log_web(console, "green")
+                log_console_web_and_discord(console, "green")
             else:
                 console = f"Failed to send {message_type.lower()} -> {sender_name}"
-                log_console_and_discord(console, "red")
-                log_web(console, "red")
+                log_console_web_and_discord(console, "red")
         except Exception as e:
             console = f"Error sending {message_type.lower()} -> {sender_name}: {e}"
-            log_console_and_discord(console, "red")
-            log_web(console, "red")
+            log_console_web_and_discord(console, "red")
     
     # Start the sending task in a separate thread
     thread = threading.Thread(target=send_task, daemon=True)
@@ -205,7 +199,7 @@ def custom_traceroute_response_handler(packet, pending_request):
     Custom handler for traceroute responses that formats and sends results properly.
     This bypasses the Meshtastic library's print() statements.
     """
-    from logging_utils import log_console_and_discord, log_web
+    from logging_utils import log_console_and_web, log_web
     import datetime
     
     try:
@@ -221,7 +215,7 @@ def custom_traceroute_response_handler(packet, pending_request):
         payload = decoded.get("payload", b"")
         
         if not payload:
-            log_console_and_discord(f"No payload in traceroute response for {sender_name}", "yellow")
+            log_console_and_web(f"No payload in traceroute response for {sender_name}", "yellow")
             error_msg = "Traceroute completed but no route data available"
             reply_messages = split_message(error_msg)
             send_messages_async(interface, reply_messages, destination_id, sender_name, "Traceroute")
@@ -246,7 +240,7 @@ def custom_traceroute_response_handler(packet, pending_request):
         to_id = packet.get("to")
         
         # Build the forward route
-        log_console_and_discord(f"Route traced towards destination:", "cyan")
+        log_console_and_web(f"Route traced towards destination:", "cyan")
         route_str = f"!{to_id:08x}"  # Start with destination (bot)
         
         len_towards = len(route_list)
@@ -268,7 +262,7 @@ def custom_traceroute_response_handler(packet, pending_request):
             final_snr_str = f" ({snr_val:.1f}dB)"
         route_str += f" --> !{from_id:08x}{final_snr_str}"
         
-        log_console_and_discord(route_str, "green")
+        log_console_and_web(route_str, "green")
         result_lines.append(f"\nRoute traced towards destination:")
         result_lines.append(route_str)
         
@@ -281,7 +275,7 @@ def custom_traceroute_response_handler(packet, pending_request):
         back_valid = hop_start is not None and len(snr_back) == len_back + 1
         
         if back_valid:
-            log_console_and_discord(f"Route traced back to us:", "cyan")
+            log_console_and_web(f"Route traced back to us:", "cyan")
             back_route_str = f"!{from_id:08x}"  # Start with origin
             
             if len_back > 0:
@@ -300,7 +294,7 @@ def custom_traceroute_response_handler(packet, pending_request):
                 final_back_snr_str = f" ({snr_val:.1f}dB)"
             back_route_str += f" --> !{to_id:08x}{final_back_snr_str}"
             
-            log_console_and_discord(back_route_str, "green")
+            log_console_and_web(back_route_str, "green")
             result_lines.append(f"\nRoute traced back to us:")
             result_lines.append(back_route_str)
         
@@ -321,12 +315,10 @@ def custom_traceroute_response_handler(packet, pending_request):
         reply_messages = split_message(result_msg)
         send_messages_async(interface, reply_messages, destination_id, sender_name, "Traceroute")
         
-        log_console_and_discord(f"Traceroute completed for {sender_name}", "green")
-        log_web(f"Traceroute completed for {sender_name}", "green")
+        log_console_and_web(f"Traceroute completed for {sender_name}", "green")
         
     except Exception as e:
-        log_console_and_discord(f"Error in custom traceroute handler: {e}", "red")
-        log_web(f"Error in custom traceroute handler: {e}", "red")
+        log_console_and_web(f"Error in custom traceroute handler: {e}", "red")
         # Send error message to user
         error_msg = f"Traceroute completed but error formatting results: {str(e)[:50]}"
         reply_messages = split_message(error_msg)
@@ -337,7 +329,7 @@ def traceroute_worker():
     """
     Worker thread that processes traceroute requests with rate limiting.
     """
-    from logging_utils import log_console_and_discord, log_web
+    from logging_utils import log_console_and_web, log_web
     global last_traceroute_time
     
     while not traceroute_shutdown.is_set():
@@ -364,16 +356,14 @@ def traceroute_worker():
             
             if time_since_last < TRACEROUTE_RATE_LIMIT:
                 wait_time = TRACEROUTE_RATE_LIMIT - time_since_last
-                log_console_and_discord(f"Traceroute rate limit: waiting {wait_time:.1f}s for {sender_name}", "yellow")
-                log_web(f"Traceroute rate limit: waiting {wait_time:.1f}s for {sender_name}", "yellow")
+                log_console_and_web(f"Traceroute rate limit: waiting {wait_time:.1f}s for {sender_name}", "yellow")
                 time.sleep(wait_time)
             
             # Update last traceroute time
             last_traceroute_time = time.time()
             
             # Run the Meshtastic traceroute
-            log_console_and_discord(f"Running Meshtastic traceroute for {sender_name}...", "cyan")
-            log_web(f"Running Meshtastic traceroute for {sender_name}...", "cyan")
+            log_console_and_web(f"Running Meshtastic traceroute for {sender_name}...", "cyan")
             
             # Notify the user that traceroute is starting
             start_msg = "Starting traceroute..."
@@ -391,8 +381,7 @@ def traceroute_worker():
                     'timestamp': time.time()
                 }
                 
-                log_console_and_discord(f"Sending traceroute to {target_id} for {sender_name}", "cyan")
-                log_web(f"Sending traceroute to {target_id} for {sender_name}", "cyan")
+                log_console_and_web(f"Sending traceroute to {target_id} for {sender_name}", "cyan")
                 
                 # Send the traceroute request using custom method that bypasses the default print() handler
                 # We'll use sendData directly with our custom callback
@@ -414,8 +403,7 @@ def traceroute_worker():
                                 if sender_id in pending_traceroutes:
                                     del pending_traceroutes[sender_id]
                         except Exception as e:
-                            log_console_and_discord(f"Error in traceroute callback: {e}", "red")
-                            log_web(f"Error in traceroute callback: {e}", "red")
+                            log_console_and_web(f"Error in traceroute callback: {e}", "red")
                     
                     # Send the traceroute using sendData with our custom callback
                     interface.sendData(
@@ -429,8 +417,7 @@ def traceroute_worker():
                     )
                     
                     # Wait for response with timeout
-                    log_console_and_discord(f"Waiting {TRACEROUTE_TIMEOUT}s for traceroute response from {sender_name}", "cyan")
-                    log_web(f"Waiting {TRACEROUTE_TIMEOUT}s for traceroute response from {sender_name}", "cyan")
+                    log_console_and_web(f"Waiting {TRACEROUTE_TIMEOUT}s for traceroute response from {sender_name}", "cyan")
                     
                     # Custom wait implementation
                     start_time = time.time()
@@ -440,12 +427,10 @@ def traceroute_worker():
                     # Check if the traceroute was completed (removed from pending)
                     if sender_id not in pending_traceroutes:
                         # Success - response was handled by our custom handler
-                        log_console_and_discord(f"Traceroute completed for {sender_name}", "green")
-                        log_web(f"Traceroute completed for {sender_name}", "green")
+                        log_console_and_web(f"Traceroute completed for {sender_name}", "green")
                     else:
                         # Timed out - clean up and send timeout message
-                        log_console_and_discord(f"Traceroute timed out for {sender_name} - no response received", "yellow")
-                        log_web(f"Traceroute timed out for {sender_name} - no response received", "yellow")
+                        log_console_and_web(f"Traceroute timed out for {sender_name} - no response received", "yellow")
                         
                         del pending_traceroutes[sender_id]
                         error_msg = "Traceroute timed out - no response received. The node may be offline or out of range."
@@ -454,8 +439,7 @@ def traceroute_worker():
                     
                 except Exception as timeout_error:
                     # Traceroute timed out or failed
-                    log_console_and_discord(f"Traceroute error for {sender_name}: {str(timeout_error)[:100]}", "red")
-                    log_web(f"Traceroute error for {sender_name}: {str(timeout_error)[:100]}", "red")
+                    log_console_and_web(f"Traceroute error for {sender_name}: {str(timeout_error)[:100]}", "red")
                     
                     if sender_id in pending_traceroutes:
                         del pending_traceroutes[sender_id]
@@ -466,8 +450,7 @@ def traceroute_worker():
                 
             except Exception as e:
                 # Clean up pending request on error
-                log_console_and_discord(f"Traceroute exception for {sender_name}: {str(e)[:100]}", "red")
-                log_web(f"Traceroute exception for {sender_name}: {str(e)[:100]}", "red")
+                log_console_and_web(f"Traceroute exception for {sender_name}: {str(e)[:100]}", "red")
                 
                 if sender_id in pending_traceroutes:
                     del pending_traceroutes[sender_id]
@@ -482,21 +465,19 @@ def traceroute_worker():
         except queue.Empty:
             continue  # Timeout, check shutdown flag
         except Exception as e:
-            log_console_and_discord(f"Traceroute worker error: {e}", "red")
-            log_web(f"Traceroute worker error: {e}", "red")
+            log_console_and_web(f"Traceroute worker error: {e}", "red")
 
 
 def start_traceroute_worker():
     """
     Start the traceroute worker thread.
     """
-    from logging_utils import log_console_and_discord, log_web
+    from logging_utils import log_console_and_web, log_web
     global traceroute_thread
     if traceroute_thread is None or not traceroute_thread.is_alive():
         traceroute_thread = threading.Thread(target=traceroute_worker, daemon=True, name="TracerouteWorker")
         traceroute_thread.start()
-        log_console_and_discord("Meshtastic traceroute worker started", "green")
-        log_web("Meshtastic traceroute worker started", "green")
+        log_console_and_web("Meshtastic traceroute worker started", "green")
 
 
 def stop_traceroute_worker():
