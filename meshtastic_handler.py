@@ -423,7 +423,6 @@ def on_receive(packet=None, interface=None, **kwargs):
             sender = sender[:47] + "..."
 
         log_console_web_and_discord(f"Incoming from {sender} via {message_origin}: '{msg}'", "cyan", True)
-        log_web(f"Incoming from {sender} via {message_origin}: '{msg}'", "cyan", True)
 
         # Handle DM-only commands (help and about)
         if message_origin == "DM" and msg in DM_COMMANDS:
