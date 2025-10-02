@@ -183,6 +183,9 @@ def update_node_info(node_id, node_info=None, packet_info=None):
         
         # Extract info from packet
         if packet_info:
+            # Update last_heard to current time when we receive a packet
+            update_data['last_heard'] = current_time
+            
             if 'decoded' in packet_info and 'user' in packet_info['decoded']:
                 user = packet_info['decoded']['user']
                 if 'longName' in user:
@@ -198,7 +201,7 @@ def update_node_info(node_id, node_info=None, packet_info=None):
                 if 'isLicensed' in user:
                     update_data['is_licensed'] = user['isLicensed']
             
-            # Extract packet metadata
+            # Extract packet metadata (rssi, snr)
             if 'rxMetadata' in packet_info and packet_info['rxMetadata']:
                 metadata = packet_info['rxMetadata'][0]
                 if 'rssi' in metadata:
