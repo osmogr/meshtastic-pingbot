@@ -76,6 +76,19 @@ def get_node_name(node_id):
         return node_id
 
 
+def get_node_name_by_num(node_num):
+    """Get the display name for a node by node number (converts to ID format first)"""
+    # Node numbers in RouteDiscovery are integers, need to match against node_id in database
+    # Node IDs in database are typically in format like "!12345678"
+    try:
+        # Try to find by matching the hex representation
+        node_id_hex = f"!{node_num:08x}"
+        return get_node_name(node_id_hex)
+    except Exception as e:
+        print(f"Database query error for node num {node_num}: {e}")
+        return str(node_num)
+
+
 def update_node_info(node_id, node_info=None, packet_info=None):
     """Update node information in the database"""
     try:

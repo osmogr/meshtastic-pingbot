@@ -41,5 +41,5 @@ TRACEROUTE_RATE_LIMIT = 30  # seconds between traceroutes globally
 MAX_QUEUE_PER_USER = 2  # Maximum queued traceroutes per user
 
 # --- Triggers and commands ---
-TRIGGERS = ["ping", "hello", "test", "traceroute"]
+TRIGGERS = ["ping", "hello", "test"]  # Basic triggers - traceroute handled separately
 DM_COMMANDS = ["help", "/help", "about", "/about"]

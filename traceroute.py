@@ -249,20 +249,28 @@ def traceroute_worker():
             
             try:
                 # Store the pending request so we can match the response
+                # Store both the destination_id (for reply) and target_node_id (for matching response)
                 pending_traceroutes[sender_id] = {
                     'destination_id': destination_id,
                     'sender_name': sender_name,
+                    'target_node_id': target_id,  # This is the node we're tracing to
                     'timestamp': time.time()
                 }
                 
+                log_console_and_discord(f"Sending traceroute to {target_id} for {sender_name}", "cyan")
+                log_web(f"Sending traceroute to {target_id} for {sender_name}", "cyan")
+                
                 # Send the traceroute request using Meshtastic interface
-                # For now, trace back to the sender (which makes sense for testing connectivity)
+                # We trace to the sender (which makes sense for testing connectivity)
                 
                 try:
                     interface.sendTraceRoute(dest=target_id, hopLimit=10)
                     
                     # Wait for the traceroute response - increased timeout for mesh networks
                     # The response will be handled by handle_traceroute_response via on_receive
+                    log_console_and_discord(f"Waiting {TRACEROUTE_TIMEOUT}s for traceroute response from {sender_name}", "cyan")
+                    log_web(f"Waiting {TRACEROUTE_TIMEOUT}s for traceroute response from {sender_name}", "cyan")
+                    
                     interface.waitForTraceRoute(TRACEROUTE_TIMEOUT)
                     
                     # Check if the traceroute was completed (removed from pending)
@@ -272,22 +280,31 @@ def traceroute_worker():
                         log_web(f"Traceroute completed for {sender_name}", "green")
                     else:
                         # Timed out - clean up and send timeout message
+                        log_console_and_discord(f"Traceroute timed out for {sender_name} - no response received", "yellow")
+                        log_web(f"Traceroute timed out for {sender_name} - no response received", "yellow")
+                        
                         del pending_traceroutes[sender_id]
-                        error_msg = "Traceroute timed out - no response received"
+                        error_msg = "Traceroute timed out - no response received. The node may be offline or out of range."
                         reply_messages = split_message(error_msg)
                         send_messages_async(interface, reply_messages, destination_id, sender_name, "Traceroute")
                     
                 except Exception as timeout_error:
                     # Traceroute timed out or failed
+                    log_console_and_discord(f"Traceroute error for {sender_name}: {str(timeout_error)[:100]}", "red")
+                    log_web(f"Traceroute error for {sender_name}: {str(timeout_error)[:100]}", "red")
+                    
                     if sender_id in pending_traceroutes:
                         del pending_traceroutes[sender_id]
                     
-                    error_msg = f"Traceroute timed out or failed: {str(timeout_error)[:50]}"
+                    error_msg = f"Traceroute failed: {str(timeout_error)[:50]}"
                     reply_messages = split_message(error_msg)
                     send_messages_async(interface, reply_messages, destination_id, sender_name, "Traceroute")
                 
             except Exception as e:
                 # Clean up pending request on error
+                log_console_and_discord(f"Traceroute exception for {sender_name}: {str(e)[:100]}", "red")
+                log_web(f"Traceroute exception for {sender_name}: {str(e)[:100]}", "red")
+                
                 if sender_id in pending_traceroutes:
                     del pending_traceroutes[sender_id]
                 
