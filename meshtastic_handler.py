@@ -162,6 +162,8 @@ def handle_traceroute_response_packet(packet, interface):
         # The traceroute response comes from the destination node
         from_id = packet.get("fromId")
         
+        log_console_and_discord(f"Received potential traceroute response from {from_id}", "cyan")
+        
         # Check if this is a response to any of our pending traceroutes
         # We need to match based on the destination we sent to, not the sender
         matching_request = None
@@ -174,10 +176,12 @@ def handle_traceroute_response_packet(packet, interface):
             if target_node_id and target_node_id == from_id:
                 matching_request = pending_request
                 matching_sender_id = sender_id
+                log_console_and_discord(f"Matched traceroute response from {from_id} to pending request for {pending_request['sender_name']}", "green")
                 break
         
         if not matching_request:
             # Not a response to our traceroute request
+            log_console_and_discord(f"No matching traceroute request for response from {from_id}", "yellow")
             return
             
         destination_id = matching_request['destination_id']
@@ -189,6 +193,8 @@ def handle_traceroute_response_packet(packet, interface):
         # Extract information from the packet
         decoded = packet.get("decoded", {})
         packet_type = decoded.get("portnum")
+        
+        log_console_and_discord(f"Processing traceroute response (portnum: {packet_type}) for {sender_name}", "cyan")
         
         # Format the traceroute result
         result_lines = []
@@ -205,6 +211,8 @@ def handle_traceroute_response_packet(packet, interface):
                     route_discovery = mesh_pb2.RouteDiscovery()
                     route_discovery.ParseFromString(payload)
                     route_dict = google.protobuf.json_format.MessageToDict(route_discovery)
+                    
+                    log_console_and_discord(f"Parsed RouteDiscovery data: {len(route_dict.get('route', []))} hops", "cyan")
                     
                     # Format the route towards destination
                     route_list = route_dict.get("route", [])
@@ -289,10 +297,11 @@ def handle_traceroute_response_packet(packet, interface):
                     else:
                         result_lines.append("Direct connection (0 hops)")
                 else:
+                    log_console_and_discord(f"No payload in traceroute response for {sender_name}", "yellow")
                     result_lines.append("No route data in response")
                     
             except Exception as parse_error:
-                log_console_and_discord(f"Error parsing traceroute data: {parse_error}", "yellow")
+                log_console_and_discord(f"Error parsing traceroute data for {sender_name}: {parse_error}", "red")
                 result_lines.append("Traceroute completed (parse error)")
         
         # Add basic packet info for any response type
