@@ -28,7 +28,14 @@ def init_database():
                 is_licensed BOOLEAN,
                 via_mqtt BOOLEAN,
                 created_at INTEGER,
-                updated_at INTEGER
+                updated_at INTEGER,
+                temperature REAL,
+                humidity REAL,
+                voltage REAL,
+                battery_level INTEGER,
+                latitude REAL,
+                longitude REAL,
+                altitude INTEGER
             )
         ''')
         
@@ -41,6 +48,29 @@ def init_database():
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_nodes_updated_at ON nodes(updated_at)
         ''')
+        
+        # Add new columns if they don't exist (for existing databases)
+        try:
+            # Check if new columns exist and add them if they don't
+            cursor.execute("PRAGMA table_info(nodes)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            new_columns = [
+                ('temperature', 'REAL'),
+                ('humidity', 'REAL'),
+                ('voltage', 'REAL'),
+                ('battery_level', 'INTEGER'),
+                ('latitude', 'REAL'),
+                ('longitude', 'REAL'),
+                ('altitude', 'INTEGER')
+            ]
+            
+            for col_name, col_type in new_columns:
+                if col_name not in columns:
+                    cursor.execute(f'ALTER TABLE nodes ADD COLUMN {col_name} {col_type}')
+                    print(f"[Database] Added column: {col_name}")
+        except Exception as e:
+            print(f"[Database] Error adding new columns: {e}")
         
         conn.commit()
         conn.close()
@@ -153,6 +183,9 @@ def update_node_info(node_id, node_info=None, packet_info=None):
         
         # Extract info from packet
         if packet_info:
+            # Update last_heard to current time when we receive a packet
+            update_data['last_heard'] = current_time
+            
             if 'decoded' in packet_info and 'user' in packet_info['decoded']:
                 user = packet_info['decoded']['user']
                 if 'longName' in user:
@@ -168,7 +201,7 @@ def update_node_info(node_id, node_info=None, packet_info=None):
                 if 'isLicensed' in user:
                     update_data['is_licensed'] = user['isLicensed']
             
-            # Extract packet metadata
+            # Extract packet metadata (rssi, snr)
             if 'rxMetadata' in packet_info and packet_info['rxMetadata']:
                 metadata = packet_info['rxMetadata'][0]
                 if 'rssi' in metadata:
@@ -188,6 +221,47 @@ def update_node_info(node_id, node_info=None, packet_info=None):
             
             if 'viaMqtt' in packet_info:
                 update_data['via_mqtt'] = packet_info['viaMqtt']
+            
+            # Extract telemetry data from packet
+            if 'decoded' in packet_info:
+                decoded = packet_info['decoded']
+                
+                # Extract telemetry data (device metrics and environment metrics)
+                if 'telemetry' in decoded:
+                    telemetry = decoded['telemetry']
+                    
+                    # Device metrics (battery, voltage)
+                    if 'deviceMetrics' in telemetry:
+                        device_metrics = telemetry['deviceMetrics']
+                        if 'batteryLevel' in device_metrics:
+                            update_data['battery_level'] = device_metrics['batteryLevel']
+                        if 'voltage' in device_metrics:
+                            update_data['voltage'] = device_metrics['voltage']
+                    
+                    # Environment metrics (temperature, humidity)
+                    if 'environmentMetrics' in telemetry:
+                        env_metrics = telemetry['environmentMetrics']
+                        if 'temperature' in env_metrics:
+                            update_data['temperature'] = env_metrics['temperature']
+                        if 'relativeHumidity' in env_metrics:
+                            update_data['humidity'] = env_metrics['relativeHumidity']
+                
+                # Extract position data (GPS coordinates, altitude)
+                if 'position' in decoded:
+                    position = decoded['position']
+                    # Latitude and longitude are in degrees * 1e-7, need to convert
+                    if 'latitudeI' in position:
+                        update_data['latitude'] = position['latitudeI'] / 1e7
+                    elif 'latitude' in position:
+                        update_data['latitude'] = position['latitude']
+                    
+                    if 'longitudeI' in position:
+                        update_data['longitude'] = position['longitudeI'] / 1e7
+                    elif 'longitude' in position:
+                        update_data['longitude'] = position['longitude']
+                    
+                    if 'altitude' in position:
+                        update_data['altitude'] = position['altitude']
         
         # Check if node exists
         cursor.execute('SELECT node_id FROM nodes WHERE node_id = ?', (node_id,))
