@@ -200,6 +200,139 @@ def queue_traceroute(interface, destination_id, sender_name, sender_id):
     return True, f"Queued (position {queue_position}, max wait ~{queue_position * TRACEROUTE_RATE_LIMIT}s)"
 
 
+def custom_traceroute_response_handler(packet, pending_request):
+    """
+    Custom handler for traceroute responses that formats and sends results properly.
+    This bypasses the Meshtastic library's print() statements.
+    """
+    from logging_utils import log_console_and_discord, log_web
+    import datetime
+    
+    try:
+        interface = pending_request['interface']
+        destination_id = pending_request['destination_id']
+        sender_name = pending_request['sender_name']
+        
+        # Parse the RouteDiscovery payload
+        from meshtastic import mesh_pb2, portnums_pb2
+        import google.protobuf.json_format
+        
+        decoded = packet.get("decoded", {})
+        payload = decoded.get("payload", b"")
+        
+        if not payload:
+            log_console_and_discord(f"No payload in traceroute response for {sender_name}", "yellow")
+            error_msg = "Traceroute completed but no route data available"
+            reply_messages = split_message(error_msg)
+            send_messages_async(interface, reply_messages, destination_id, sender_name, "Traceroute")
+            return
+        
+        route_discovery = mesh_pb2.RouteDiscovery()
+        route_discovery.ParseFromString(payload)
+        route_dict = google.protobuf.json_format.MessageToDict(route_discovery)
+        
+        # Format the traceroute result
+        result_lines = []
+        result_lines.append(f"Traceroute to {sender_name}:")
+        
+        # Constants
+        UNK_SNR = -128
+        
+        # Format route towards destination
+        route_list = route_dict.get("route", [])
+        snr_towards = route_dict.get("snrTowards", [])
+        
+        from_id = packet.get("from")
+        to_id = packet.get("to")
+        
+        # Build the forward route
+        log_console_and_discord(f"Route traced towards destination:", "cyan")
+        route_str = f"!{to_id:08x}"  # Start with destination (bot)
+        
+        len_towards = len(route_list)
+        snr_towards_valid = len(snr_towards) == len_towards + 1
+        
+        if len_towards > 0:
+            for idx, node_num in enumerate(route_list):
+                node_id = f"!{node_num:08x}"
+                snr_str = ""
+                if snr_towards_valid and idx < len(snr_towards) and snr_towards[idx] != UNK_SNR:
+                    snr_val = snr_towards[idx] / 4.0
+                    snr_str = f" ({snr_val:.1f}dB)"
+                route_str += f" --> {node_id}{snr_str}"
+        
+        # End with origin (the node that requested traceroute)
+        final_snr_str = ""
+        if snr_towards_valid and len(snr_towards) > 0 and snr_towards[-1] != UNK_SNR:
+            snr_val = snr_towards[-1] / 4.0
+            final_snr_str = f" ({snr_val:.1f}dB)"
+        route_str += f" --> !{from_id:08x}{final_snr_str}"
+        
+        log_console_and_discord(route_str, "green")
+        result_lines.append(f"\nRoute traced towards destination:")
+        result_lines.append(route_str)
+        
+        # Check for return route
+        route_back = route_dict.get("routeBack", [])
+        snr_back = route_dict.get("snrBack", [])
+        hop_start = packet.get("hopStart")
+        
+        len_back = len(route_back)
+        back_valid = hop_start is not None and len(snr_back) == len_back + 1
+        
+        if back_valid:
+            log_console_and_discord(f"Route traced back to us:", "cyan")
+            back_route_str = f"!{from_id:08x}"  # Start with origin
+            
+            if len_back > 0:
+                for idx, node_num in enumerate(route_back):
+                    node_id = f"!{node_num:08x}"
+                    snr_str = ""
+                    if idx < len(snr_back) and snr_back[idx] != UNK_SNR:
+                        snr_val = snr_back[idx] / 4.0
+                        snr_str = f" ({snr_val:.1f}dB)"
+                    back_route_str += f" --> {node_id}{snr_str}"
+            
+            # End with destination (us/bot)
+            final_back_snr_str = ""
+            if len(snr_back) > 0 and snr_back[-1] != UNK_SNR:
+                snr_val = snr_back[-1] / 4.0
+                final_back_snr_str = f" ({snr_val:.1f}dB)"
+            back_route_str += f" --> !{to_id:08x}{final_back_snr_str}"
+            
+            log_console_and_discord(back_route_str, "green")
+            result_lines.append(f"\nRoute traced back to us:")
+            result_lines.append(back_route_str)
+        
+        # Add hop count
+        hop_count = len_towards
+        if hop_count == 0:
+            result_lines.append("\nDirect connection (0 hops)")
+        else:
+            result_lines.append(f"\nTotal hops: {hop_count}")
+        
+        # Add timestamp
+        current_timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        result_lines.append(f"Completed at: {current_timestamp}")
+        
+        result_msg = "\n".join(result_lines)
+        
+        # Send the result back to the user
+        reply_messages = split_message(result_msg)
+        send_messages_async(interface, reply_messages, destination_id, sender_name, "Traceroute")
+        
+        log_console_and_discord(f"Traceroute completed for {sender_name}", "green")
+        log_web(f"Traceroute completed for {sender_name}", "green")
+        
+    except Exception as e:
+        log_console_and_discord(f"Error in custom traceroute handler: {e}", "red")
+        log_web(f"Error in custom traceroute handler: {e}", "red")
+        # Send error message to user
+        error_msg = f"Traceroute completed but error formatting results: {str(e)[:50]}"
+        reply_messages = split_message(error_msg)
+        send_messages_async(interface, reply_messages, destination_id, sender_name, "Traceroute")
+
+
 def traceroute_worker():
     """
     Worker thread that processes traceroute requests with rate limiting.
@@ -249,8 +382,9 @@ def traceroute_worker():
             
             try:
                 # Store the pending request so we can match the response
-                # Store both the destination_id (for reply) and target_node_id (for matching response)
+                # Store all request data for the custom handler
                 pending_traceroutes[sender_id] = {
+                    'interface': interface,
                     'destination_id': destination_id,
                     'sender_name': sender_name,
                     'target_node_id': target_id,  # This is the node we're tracing to
@@ -260,22 +394,52 @@ def traceroute_worker():
                 log_console_and_discord(f"Sending traceroute to {target_id} for {sender_name}", "cyan")
                 log_web(f"Sending traceroute to {target_id} for {sender_name}", "cyan")
                 
-                # Send the traceroute request using Meshtastic interface
-                # We trace to the sender (which makes sense for testing connectivity)
+                # Send the traceroute request using custom method that bypasses the default print() handler
+                # We'll use sendData directly with our custom callback
                 
                 try:
-                    interface.sendTraceRoute(dest=target_id, hopLimit=10)
+                    from meshtastic import mesh_pb2, portnums_pb2
                     
-                    # Wait for the traceroute response - increased timeout for mesh networks
-                    # The response will be handled by handle_traceroute_response via on_receive
+                    # Create RouteDiscovery message
+                    route_discovery = mesh_pb2.RouteDiscovery()
+                    
+                    # Define our custom response handler closure
+                    def on_custom_traceroute_response(packet):
+                        """Custom callback that captures the response and formats it properly"""
+                        try:
+                            if sender_id in pending_traceroutes:
+                                pending_request = pending_traceroutes[sender_id]
+                                custom_traceroute_response_handler(packet, pending_request)
+                                # Remove from pending after handling
+                                if sender_id in pending_traceroutes:
+                                    del pending_traceroutes[sender_id]
+                        except Exception as e:
+                            log_console_and_discord(f"Error in traceroute callback: {e}", "red")
+                            log_web(f"Error in traceroute callback: {e}", "red")
+                    
+                    # Send the traceroute using sendData with our custom callback
+                    interface.sendData(
+                        route_discovery,
+                        destinationId=target_id,
+                        portNum=portnums_pb2.PortNum.TRACEROUTE_APP,
+                        wantResponse=True,
+                        onResponse=on_custom_traceroute_response,
+                        channelIndex=0,
+                        hopLimit=10,
+                    )
+                    
+                    # Wait for response with timeout
                     log_console_and_discord(f"Waiting {TRACEROUTE_TIMEOUT}s for traceroute response from {sender_name}", "cyan")
                     log_web(f"Waiting {TRACEROUTE_TIMEOUT}s for traceroute response from {sender_name}", "cyan")
                     
-                    interface.waitForTraceRoute(TRACEROUTE_TIMEOUT)
+                    # Custom wait implementation
+                    start_time = time.time()
+                    while sender_id in pending_traceroutes and (time.time() - start_time) < TRACEROUTE_TIMEOUT:
+                        time.sleep(0.5)
                     
                     # Check if the traceroute was completed (removed from pending)
                     if sender_id not in pending_traceroutes:
-                        # Success - response was handled by handle_traceroute_response
+                        # Success - response was handled by our custom handler
                         log_console_and_discord(f"Traceroute completed for {sender_name}", "green")
                         log_web(f"Traceroute completed for {sender_name}", "green")
                     else:

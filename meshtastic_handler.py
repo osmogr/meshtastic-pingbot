@@ -352,12 +352,13 @@ def on_receive(packet=None, interface=None, **kwargs):
     # Handle different packet types
     packet_type = packet.get("decoded", {}).get("portnum")
     
-    # Handle traceroute responses (ROUTING_APP and TRACEROUTE_APP packets)
-    if packet_type in [meshtastic.portnums_pb2.ROUTING_APP, meshtastic.portnums_pb2.TRACEROUTE_APP]:
-        sender_id = packet.get("fromId")
-        if sender_id and sender_id in pending_traceroutes:
-            handle_traceroute_response_packet(packet, interface)
-        return
+    # NOTE: Traceroute responses are now handled by custom callback in traceroute.py
+    # The old handler is kept here but will not be triggered since we use a custom onResponse callback
+    # if packet_type in [meshtastic.portnums_pb2.ROUTING_APP, meshtastic.portnums_pb2.TRACEROUTE_APP]:
+    #     sender_id = packet.get("fromId")
+    #     if sender_id and sender_id in pending_traceroutes:
+    #         handle_traceroute_response_packet(packet, interface)
+    #     return
     
     # Update database for NODEINFO_APP packets
     if packet_type == meshtastic.portnums_pb2.NODEINFO_APP:
