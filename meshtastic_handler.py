@@ -132,12 +132,13 @@ def get_help_response():
     """Generate help response for DM help commands (optimized for message splitting)"""
     return (
         f"Meshtastic Pingbot Help:\n\n"
-        f"I respond to these triggers in channels and DMs: {', '.join(TRIGGERS)}\n\n"
+        f"Basic triggers (channels and DMs): {', '.join(TRIGGERS)}\n\n"
 
         f"Commands:\n"
         f"• ping/hello/test - Connection info (RSSI, SNR, hop count)\n"
-        f"• traceroute - Meshtastic network path trace (30s rate limit, max 2 queued per user)\n\n"
-        f"Enhanced ping command: 'ping N' where N is 1-5 for multiple responses.\n\n"
+        f"• ping N - Send N responses (N=1-5)\n"
+        f"• traceroute - Network path trace with hop details\n"
+        f"  (30s rate limit, max 2 queued per user)\n\n"
 
         f"DM-only commands: help, /help - Show this help message. "
         f"about, /about - Show information about this bot."
