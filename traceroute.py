@@ -242,6 +242,11 @@ def traceroute_worker():
             log_console_and_discord(f"Running Meshtastic traceroute for {sender_name}...", "cyan")
             log_web(f"Running Meshtastic traceroute for {sender_name}...", "cyan")
             
+            # Notify the user that traceroute is starting
+            start_msg = "Starting traceroute..."
+            start_messages = split_message(start_msg)
+            send_messages_async(interface, start_messages, destination_id, sender_name, "Traceroute Start")
+            
             try:
                 # Store the pending request so we can match the response
                 pending_traceroutes[sender_id] = {
