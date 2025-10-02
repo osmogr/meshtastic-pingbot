@@ -14,7 +14,7 @@ The bot now maintains a SQLite database (`nodedb.sqlite`) to store information a
 - **Comprehensive data extraction**: Captures all available node information including names, hardware, role, licensing, and network metrics
 - **Automatic retry & refresh**: Retries failed downloads and periodically refreshes every 6 hours
 - **Real-time statistics**: Monitors database health with completion rates and data quality metrics
-- **Real-time updates**: Listens for `NODEINFO_APP` and `NEIGHBORINFO_APP` packets to keep node information current
+- **Real-time updates**: Listens for `NODEINFO_APP`, `NEIGHBORINFO_APP`, `TELEMETRY_APP`, and `POSITION_APP` packets to keep node information current
 - **Smart name resolution**: Uses stored long/short names from the database instead of displaying raw radio IDs
 - **Automatic cleanup**: Removes nodes that haven't been seen for 30+ days to keep the database clean
 - **Advanced debugging**: Detailed logging helps diagnose nodedb download issues

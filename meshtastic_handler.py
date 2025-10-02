@@ -380,6 +380,26 @@ def on_receive(packet=None, interface=None, **kwargs):
             log_web(f"Updated neighbor info for {sender_name} ({sender_id})", "blue")
         return
     
+    # Update database for TELEMETRY_APP packets
+    if packet_type == meshtastic.portnums_pb2.TELEMETRY_APP:
+        sender_id = packet.get("fromId")
+        if sender_id:
+            update_node_info(sender_id, packet_info=packet)
+            sender_name = get_node_name(sender_id)
+            log_console_and_discord(f"Updated telemetry for {sender_name} ({sender_id})", "blue")
+            log_web(f"Updated telemetry for {sender_name} ({sender_id})", "blue")
+        return
+    
+    # Update database for POSITION_APP packets
+    if packet_type == meshtastic.portnums_pb2.POSITION_APP:
+        sender_id = packet.get("fromId")
+        if sender_id:
+            update_node_info(sender_id, packet_info=packet)
+            sender_name = get_node_name(sender_id)
+            log_console_and_discord(f"Updated position for {sender_name} ({sender_id})", "blue")
+            log_web(f"Updated position for {sender_name} ({sender_id})", "blue")
+        return
+    
     # Handle text messages (existing functionality)
     if "decoded" not in packet or "text" not in packet["decoded"]:
         return
