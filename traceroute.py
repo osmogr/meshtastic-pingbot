@@ -1,4 +1,28 @@
-"""Traceroute functionality for Meshtastic PingBot."""
+"""Traceroute functionality for Meshtastic PingBot.
+
+This module implements a queuing and rate-limiting system for traceroute requests
+to respect the Meshtastic firmware's limitation of one traceroute every 30 seconds.
+
+System Architecture:
+-------------------
+1. User sends "traceroute" command via Meshtastic
+2. Request is queued in traceroute_queue (FIFO, thread-safe)
+3. Worker thread (traceroute_worker) processes requests sequentially
+4. Before sending, worker checks if TRACEROUTE_RATE_LIMIT seconds have passed
+5. If not, worker waits the remaining time to respect firmware limits
+6. Traceroute is sent and response is awaited (with TRACEROUTE_TIMEOUT)
+7. Response is formatted and sent back to the requester
+8. Next request in queue is processed
+
+Rate Limiting:
+-------------
+- Global limit: One traceroute every TRACEROUTE_RATE_LIMIT (30) seconds
+- Per-user limit: MAX_QUEUE_PER_USER (2) queued requests per user
+- Firmware constraint: Meshtastic firmware rejects traceroutes sent < 30s apart
+
+The implementation ensures traceroutes are spaced exactly 30 seconds apart,
+preventing firmware rejections and timeout errors.
+"""
 
 import queue
 import time
@@ -7,17 +31,19 @@ from collections import defaultdict
 from config import TRACEROUTE_RATE_LIMIT, MAX_QUEUE_PER_USER
 
 # Traceroute system globals
-last_traceroute_time = 0
+# Initialize to a very old timestamp to ensure first request is sent immediately
+# When bot starts, any request will have time_since_last >> TRACEROUTE_RATE_LIMIT
+last_traceroute_time = 0  # Will be compared against current time.time()
 TRACEROUTE_TIMEOUT = 15  # seconds to wait for traceroute response
 
 # User-specific traceroute queues
 traceroute_queues = defaultdict(list)  # user_id -> list of pending requests
 
 # Traceroute processing 
-traceroute_queue = queue.Queue()
+traceroute_queue = queue.Queue()  # Thread-safe queue for traceroute requests
 traceroute_shutdown = threading.Event()
 traceroute_thread = None
-pending_traceroutes = {}  # Keep track of pending traceroute requests by user
+pending_traceroutes = {}  # Keep track of pending traceroute requests by user (sender_id -> request_data)
 
 # Message splitting
 MAX_MESSAGE_LENGTH = 200  # Meshtastic practical message limit
@@ -169,6 +195,26 @@ def send_messages_async(interface, messages, destination_id, sender_name, messag
 def queue_traceroute(interface, destination_id, sender_name, sender_id):
     """
     Queue a traceroute request for a user, respecting per-user limits.
+    
+    This function adds a traceroute request to the processing queue. Requests
+    are processed sequentially by the traceroute_worker thread with rate limiting.
+    
+    Args:
+        interface: Meshtastic interface object
+        destination_id: Node ID to send the traceroute response to (requester's ID)
+        sender_name: Human-readable name of the requester
+        sender_id: Unique ID of the requester (for queue tracking)
+    
+    Returns:
+        tuple: (success: bool, message: str)
+            success=True if request was queued successfully
+            success=False if user's queue is full
+            message contains queue position or error details
+    
+    Note:
+        - Each user can have at most MAX_QUEUE_PER_USER requests queued
+        - Requests are processed FIFO with TRACEROUTE_RATE_LIMIT seconds between sends
+        - The actual traceroute traces back to the requester (destination_id == sender_id)
     """
     # Check user queue limit
     user_queue = traceroute_queues[sender_id]
@@ -328,6 +374,21 @@ def custom_traceroute_response_handler(packet, pending_request):
 def traceroute_worker():
     """
     Worker thread that processes traceroute requests with rate limiting.
+    
+    This worker ensures that traceroute requests are processed sequentially with
+    a minimum of TRACEROUTE_RATE_LIMIT seconds between each send. This respects
+    the Meshtastic firmware's limitation of one traceroute every 30 seconds.
+    
+    The worker:
+    1. Pulls requests from the traceroute_queue (FIFO)
+    2. Checks if enough time has passed since the last traceroute was sent
+    3. Waits if necessary to respect the rate limit
+    4. Sends the traceroute and waits for response (with timeout)
+    5. Processes the next request in the queue
+    
+    Rate limiting is enforced globally across all users to respect firmware limits.
+    Per-user queue limits (MAX_QUEUE_PER_USER) prevent any single user from
+    monopolizing the queue.
     """
     from logging_utils import log_console_and_web, log_web
     global last_traceroute_time
@@ -344,6 +405,13 @@ def traceroute_worker():
             sender_name = request_data['sender_name']
             sender_id = request_data['sender_id']
             target_id = request_data['target_id']
+            
+            # Log queue status
+            remaining_in_queue = traceroute_queue.qsize()
+            if remaining_in_queue > 0:
+                log_console_and_web(f"Processing traceroute for {sender_name} ({remaining_in_queue} remaining in queue)", "cyan")
+            else:
+                log_console_and_web(f"Processing traceroute for {sender_name} (queue empty)", "cyan")
             
             # Remove from user queue
             user_queue = traceroute_queues[sender_id]
