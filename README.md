@@ -30,7 +30,23 @@ The bot now maintains a SQLite database (`nodedb.sqlite`) to store information a
 - `help`, `/help` - Shows available triggers and commands
 - `about`, `/about` - Shows information about the bot
 
+### Traceroute Rate Limiting
+
+The traceroute feature implements sophisticated queuing and rate limiting to respect the Meshtastic firmware's constraint of one traceroute every 30 seconds:
+
+- **Global Rate Limit**: One traceroute every 30 seconds (firmware requirement)
+- **Per-User Queue**: Each user can queue up to 2 traceroute requests
+- **FIFO Processing**: Requests are processed first-come, first-served
+- **Smart Queuing**: Users receive queue position and estimated wait time
+- **Robust Handling**: Timeouts and errors are handled gracefully
+
+For implementation details, see `TRACEROUTE_IMPLEMENTATION.md`.
+To validate the implementation, run: `python3 validate_traceroute.py`
+
 ### Recent Improvements
+
+- **Traceroute Rate Limiting**: Comprehensive queuing system with 30-second rate limiting to comply with firmware constraints
+- **Enhanced Documentation**: Detailed implementation guides and validation scripts
 
 - **Enhanced NodeDB Download**: Comprehensive node data extraction from multiple sources with retry logic
 - **Dual Source Node Processing**: Extracts nodes from both `interface.nodes` and `interface.nodesByNum` for maximum coverage
