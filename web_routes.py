@@ -352,7 +352,13 @@ NODES_TEMPLATE = """
                 </div>
                 <div class="detail-item">
                   <span class="detail-label">Uptime:</span>
-                  <span class="detail-value">{{ formatUptime(node.uptime_seconds) if node.uptime_seconds else 'N/A' }}</span>
+                  <span class="detail-value">
+                    {% if node.uptime_seconds %}
+                      {{ '%dd %dh %dm' % ((node.uptime_seconds // 86400), ((node.uptime_seconds % 86400) // 3600), ((node.uptime_seconds % 3600) // 60)) }}
+                    {% else %}
+                      N/A
+                    {% endif %}
+                  </span>
                 </div>
                 <div class="detail-item">
                   <span class="detail-label">Temperature:</span>
