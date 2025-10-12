@@ -174,12 +174,28 @@ NODES_TEMPLATE = """
     th.sort-desc::after { content: ' ↓'; opacity: 1; color: #00ff00; }
     
     tbody tr:hover { background: #333; }
-    .node-id { color: #00ffff; font-weight: bold; }
+    tbody tr.expanded { background: #2d2d2d; }
+    .node-id { color: #00ffff; font-weight: bold; cursor: pointer; }
+    .node-id:hover { text-decoration: underline; }
     .long-name { color: #00ff00; }
     .short-name { color: #ffff00; }
     .good-signal { color: #00ff00; }
     .fair-signal { color: #ffff00; }
     .poor-signal { color: #ff5555; }
+    
+    .details-row { display: none; }
+    .details-row.show { display: table-row; }
+    .details-cell { padding: 20px; background: #252525; border-left: 3px solid #00ff00; }
+    .details-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; }
+    .detail-group { background: #2a2a2a; padding: 15px; border-radius: 5px; }
+    .detail-group h4 { margin: 0 0 10px 0; color: #00ff00; font-size: 14px; }
+    .detail-item { margin: 5px 0; font-size: 12px; }
+    .detail-label { color: #888; display: inline-block; width: 180px; }
+    .detail-value { color: #fff; }
+    .detail-value.true { color: #00ff00; }
+    .detail-value.false { color: #ff5555; }
+    .detail-value.null { color: #888; font-style: italic; }
+    
     .pagination { margin: 20px 0; text-align: center; }
     .pagination button { 
       background: #444; color: #eee; border: 1px solid #666; padding: 5px 10px; 
@@ -188,6 +204,13 @@ NODES_TEMPLATE = """
     .pagination button:hover:not(:disabled) { background: #555; }
     .pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
     .pagination .current { background: #00ff00; color: #000; }
+    
+    .badge { 
+      display: inline-block; padding: 2px 6px; border-radius: 3px; 
+      font-size: 10px; font-weight: bold; margin-left: 5px;
+    }
+    .badge-favorite { background: #ffaa00; color: #000; }
+    .badge-licensed { background: #00aa00; color: #fff; }
   </style>
 </head>
 <body>
@@ -203,11 +226,12 @@ NODES_TEMPLATE = """
       <input type="text" id="searchInput" placeholder="Search nodes..." value="{{ search }}" />
       <button onclick="refreshData()">Search</button>
       <button onclick="exportData()">Export CSV</button>
+      <button onclick="exportJSON()">Export JSON</button>
       <button onclick="refreshNodeDB()">Refresh NodeDB</button>
     </div>
     
     <div class="stats">
-      Total nodes: {{ total_count }} | Page {{ page }} of {{ total_pages }}
+      Total nodes: {{ total_count }} | Page {{ page }} of {{ total_pages }} | Click a node ID to see all details
     </div>
     
     <table>
@@ -215,29 +239,172 @@ NODES_TEMPLATE = """
         <tr>
           <th class="sortable" data-column="node_id">Node ID</th>
           <th class="sortable" data-column="long_name">Long Name</th>
-          <th class="sortable" data-column="short_name">Short Name</th>
+          <th class="sortable" data-column="short_name">Short</th>
           <th class="sortable" data-column="rssi">RSSI</th>
           <th class="sortable" data-column="snr">SNR</th>
-          <th class="sortable" data-column="hop_count">Hops</th>
+          <th class="sortable" data-column="hops_away">Hops</th>
+          <th class="sortable" data-column="battery_level">Batt</th>
+          <th class="sortable" data-column="voltage">Volt</th>
+          <th class="sortable" data-column="channel_utilization">Ch%</th>
           <th class="sortable" data-column="last_heard">Last Heard</th>
-          <th class="sortable" data-column="updated_at">Updated</th>
         </tr>
       </thead>
       <tbody>
         {% for node in nodes %}
-        <tr>
-          <td class="node-id">{{ node.node_id }}</td>
+        <tr onclick="toggleDetails('{{ node.node_id }}')">
+          <td class="node-id">
+            {{ node.node_id }}
+            {% if node.is_favorite %}<span class="badge badge-favorite">★</span>{% endif %}
+            {% if node.is_licensed %}<span class="badge badge-licensed">L</span>{% endif %}
+          </td>
           <td class="long-name">{{ node.long_name or 'N/A' }}</td>
           <td class="short-name">{{ node.short_name or 'N/A' }}</td>
           <td class="{{ 'good-signal' if node.rssi and node.rssi > -80 else 'fair-signal' if node.rssi and node.rssi > -100 else 'poor-signal' }}">
             {{ node.rssi if node.rssi else 'N/A' }}
           </td>
           <td class="{{ 'good-signal' if node.snr and node.snr > 5 else 'fair-signal' if node.snr and node.snr > 0 else 'poor-signal' }}">
-            {{ node.snr if node.snr else 'N/A' }}
+            {{ '%.1f' % node.snr if node.snr else 'N/A' }}
           </td>
-          <td>{{ node.hop_count if node.hop_count else 'N/A' }}</td>
+          <td>{{ node.hops_away if node.hops_away is not none else 'N/A' }}</td>
+          <td class="{{ 'good-signal' if node.battery_level and node.battery_level > 75 else 'fair-signal' if node.battery_level and node.battery_level > 25 else 'poor-signal' }}">
+            {{ '%d%%' % node.battery_level if node.battery_level else 'N/A' }}
+          </td>
+          <td>{{ '%.2fV' % node.voltage if node.voltage else 'N/A' }}</td>
+          <td>{{ '%.1f%%' % node.channel_utilization if node.channel_utilization else 'N/A' }}</td>
           <td>{{ node.last_heard | formatTimestamp if node.last_heard else 'Never' }}</td>
-          <td>{{ node.updated_at | formatTimestamp if node.updated_at else 'Never' }}</td>
+        </tr>
+        <tr class="details-row" id="details-{{ node.node_id }}">
+          <td colspan="10" class="details-cell">
+            <div class="details-grid">
+              <div class="detail-group">
+                <h4>Node Information</h4>
+                <div class="detail-item">
+                  <span class="detail-label">Node Number:</span>
+                  <span class="detail-value">{{ node.node_num if node.node_num else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">MAC Address:</span>
+                  <span class="detail-value">{{ node.mac_addr if node.mac_addr else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Hardware Model:</span>
+                  <span class="detail-value">{{ node.hw_model if node.hw_model else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Role:</span>
+                  <span class="detail-value">{{ node.role if node.role else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Public Key:</span>
+                  <span class="detail-value" style="font-size: 10px; word-break: break-all;">{{ node.public_key[:40] + '...' if node.public_key and node.public_key|length > 40 else (node.public_key if node.public_key else 'N/A') }}</span>
+                </div>
+              </div>
+              
+              <div class="detail-group">
+                <h4>Network Metrics</h4>
+                <div class="detail-item">
+                  <span class="detail-label">RSSI:</span>
+                  <span class="detail-value">{{ node.rssi if node.rssi else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">SNR:</span>
+                  <span class="detail-value">{{ '%.2f' % node.snr if node.snr else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Hop Count:</span>
+                  <span class="detail-value">{{ node.hop_count if node.hop_count else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Hops Away:</span>
+                  <span class="detail-value">{{ node.hops_away if node.hops_away is not none else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Via MQTT:</span>
+                  <span class="detail-value {{ 'true' if node.via_mqtt else 'false' }}">{{ 'Yes' if node.via_mqtt else 'No' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Is Favorite:</span>
+                  <span class="detail-value {{ 'true' if node.is_favorite else 'false' }}">{{ 'Yes' if node.is_favorite else 'No' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Is Licensed:</span>
+                  <span class="detail-value {{ 'true' if node.is_licensed else 'false' }}">{{ 'Yes' if node.is_licensed else 'No' }}</span>
+                </div>
+              </div>
+              
+              <div class="detail-group">
+                <h4>Device Metrics</h4>
+                <div class="detail-item">
+                  <span class="detail-label">Battery Level:</span>
+                  <span class="detail-value">{{ '%d%%' % node.battery_level if node.battery_level else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Voltage:</span>
+                  <span class="detail-value">{{ '%.3fV' % node.voltage if node.voltage else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Channel Utilization:</span>
+                  <span class="detail-value">{{ '%.2f%%' % node.channel_utilization if node.channel_utilization else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Air Util TX:</span>
+                  <span class="detail-value">{{ '%.2f%%' % node.air_util_tx if node.air_util_tx else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Uptime:</span>
+                  <span class="detail-value">{{ formatUptime(node.uptime_seconds) if node.uptime_seconds else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Temperature:</span>
+                  <span class="detail-value">{{ '%.1f°C' % node.temperature if node.temperature else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Humidity:</span>
+                  <span class="detail-value">{{ '%.1f%%' % node.humidity if node.humidity else 'N/A' }}</span>
+                </div>
+              </div>
+              
+              <div class="detail-group">
+                <h4>Position Data</h4>
+                <div class="detail-item">
+                  <span class="detail-label">Latitude:</span>
+                  <span class="detail-value">{{ '%.6f' % node.latitude if node.latitude else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Longitude:</span>
+                  <span class="detail-value">{{ '%.6f' % node.longitude if node.longitude else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Altitude:</span>
+                  <span class="detail-value">{{ '%dm' % node.altitude if node.altitude else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Position Time:</span>
+                  <span class="detail-value">{{ node.position_time | formatTimestamp if node.position_time else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Location Source:</span>
+                  <span class="detail-value">{{ node.position_location_source if node.position_location_source else 'N/A' }}</span>
+                </div>
+              </div>
+              
+              <div class="detail-group">
+                <h4>Timestamps</h4>
+                <div class="detail-item">
+                  <span class="detail-label">Last Heard:</span>
+                  <span class="detail-value">{{ node.last_heard | formatTimestamp if node.last_heard else 'Never' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Created At:</span>
+                  <span class="detail-value">{{ node.created_at | formatTimestamp if node.created_at else 'N/A' }}</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Updated At:</span>
+                  <span class="detail-value">{{ node.updated_at | formatTimestamp if node.updated_at else 'N/A' }}</span>
+                </div>
+              </div>
+            </div>
+          </td>
         </tr>
         {% endfor %}
       </tbody>
@@ -270,6 +437,27 @@ NODES_TEMPLATE = """
     let currentSort = '{{ sort_by }}';
     let currentOrder = '{{ sort_order }}';
     let currentSearch = '{{ search }}';
+    
+    function formatUptime(seconds) {
+      if (!seconds) return 'N/A';
+      const days = Math.floor(seconds / 86400);
+      const hours = Math.floor((seconds % 86400) / 3600);
+      const mins = Math.floor((seconds % 3600) / 60);
+      return days + 'd ' + hours + 'h ' + mins + 'm';
+    }
+    
+    function toggleDetails(nodeId) {
+      const detailsRow = document.getElementById('details-' + nodeId);
+      if (detailsRow.classList.contains('show')) {
+        detailsRow.classList.remove('show');
+      } else {
+        // Close all other details rows
+        document.querySelectorAll('.details-row.show').forEach(row => {
+          row.classList.remove('show');
+        });
+        detailsRow.classList.add('show');
+      }
+    }
     
     function changePage(page) {
       const params = new URLSearchParams({
@@ -341,6 +529,10 @@ NODES_TEMPLATE = """
       window.open('/nodes/export?' + params.toString());
     }
     
+    function exportJSON() {
+      window.open('/nodes/export?format=json');
+    }
+    
     // Initialize
     document.addEventListener('DOMContentLoaded', function() {
       updateSortHeaders();
@@ -384,7 +576,8 @@ def setup_routes(app, is_connected_func, message_queue_count_func, enhanced_down
         per_page = int(request.args.get('per_page', 50))
         
         # Validate sort parameters
-        valid_columns = ['node_id', 'long_name', 'short_name', 'rssi', 'snr', 'hop_count', 'last_heard', 'updated_at']
+        valid_columns = ['node_id', 'long_name', 'short_name', 'rssi', 'snr', 'hop_count', 'hops_away', 
+                        'last_heard', 'updated_at', 'battery_level', 'voltage', 'channel_utilization']
         if sort_by not in valid_columns:
             sort_by = 'updated_at'
         if sort_order not in ['asc', 'desc']:
@@ -394,11 +587,13 @@ def setup_routes(app, is_connected_func, message_queue_count_func, enhanced_down
             conn = sqlite3.connect(DATABASE_PATH)
             cursor = conn.cursor()
             
-            # Build query with search filter
+            # Build query with search filter - include all fields
             base_query = '''
-                SELECT node_id, long_name, short_name, mac_addr, hw_model, role, 
-                       last_heard, snr, rssi, hop_count, is_licensed, via_mqtt, 
-                       created_at, updated_at
+                SELECT node_id, node_num, long_name, short_name, mac_addr, hw_model, role, 
+                       public_key, last_heard, snr, rssi, hop_count, hops_away, is_licensed, 
+                       is_favorite, via_mqtt, created_at, updated_at, temperature, humidity, 
+                       voltage, battery_level, channel_utilization, air_util_tx, uptime_seconds,
+                       latitude, longitude, altitude, position_time, position_location_source
                 FROM nodes
             '''
             
@@ -431,19 +626,35 @@ def setup_routes(app, is_connected_func, message_queue_count_func, enhanced_down
             for row in cursor.fetchall():
                 node_data = {
                     'node_id': row[0],
-                    'long_name': row[1],
-                    'short_name': row[2],
-                    'mac_addr': row[3],
-                    'hw_model': row[4],
-                    'role': row[5],
-                    'last_heard': row[6],
-                    'snr': row[7],
-                    'rssi': row[8],
-                    'hop_count': row[9],
-                    'is_licensed': row[10],
-                    'via_mqtt': row[11],
-                    'created_at': row[12],
-                    'updated_at': row[13]
+                    'node_num': row[1],
+                    'long_name': row[2],
+                    'short_name': row[3],
+                    'mac_addr': row[4],
+                    'hw_model': row[5],
+                    'role': row[6],
+                    'public_key': row[7],
+                    'last_heard': row[8],
+                    'snr': row[9],
+                    'rssi': row[10],
+                    'hop_count': row[11],
+                    'hops_away': row[12],
+                    'is_licensed': row[13],
+                    'is_favorite': row[14],
+                    'via_mqtt': row[15],
+                    'created_at': row[16],
+                    'updated_at': row[17],
+                    'temperature': row[18],
+                    'humidity': row[19],
+                    'voltage': row[20],
+                    'battery_level': row[21],
+                    'channel_utilization': row[22],
+                    'air_util_tx': row[23],
+                    'uptime_seconds': row[24],
+                    'latitude': row[25],
+                    'longitude': row[26],
+                    'altitude': row[27],
+                    'position_time': row[28],
+                    'position_location_source': row[29]
                 }
                 nodes_data.append(node_data)
             
@@ -493,7 +704,8 @@ def setup_routes(app, is_connected_func, message_queue_count_func, enhanced_down
             search = request.args.get('search', '')
             
             # Validate sort parameters
-            valid_columns = ['node_id', 'long_name', 'short_name', 'rssi', 'snr', 'hop_count', 'last_heard', 'updated_at']
+            valid_columns = ['node_id', 'long_name', 'short_name', 'rssi', 'snr', 'hop_count', 'hops_away',
+                            'last_heard', 'updated_at', 'battery_level', 'voltage', 'channel_utilization']
             if sort_by not in valid_columns:
                 sort_by = 'updated_at'
             if sort_order not in ['asc', 'desc']:
@@ -512,15 +724,17 @@ def setup_routes(app, is_connected_func, message_queue_count_func, enhanced_down
                 else:
                     return jsonify({'error': 'Failed to export nodedb'}), 500
             
-            # Export as CSV (default)
+            # Export as CSV (default) - include all fields
             conn = sqlite3.connect(DATABASE_PATH)
             cursor = conn.cursor()
             
-            # Build query (no pagination for export)
+            # Build query (no pagination for export) - include all fields
             base_query = '''
-                SELECT node_id, long_name, short_name, mac_addr, hw_model, role, 
-                       last_heard, snr, rssi, hop_count, is_licensed, via_mqtt, 
-                       created_at, updated_at
+                SELECT node_id, node_num, long_name, short_name, mac_addr, hw_model, role, 
+                       public_key, last_heard, snr, rssi, hop_count, hops_away, is_licensed, 
+                       is_favorite, via_mqtt, created_at, updated_at, temperature, humidity, 
+                       voltage, battery_level, channel_utilization, air_util_tx, uptime_seconds,
+                       latitude, longitude, altitude, position_time, position_location_source
                 FROM nodes
             '''
             
@@ -545,11 +759,13 @@ def setup_routes(app, is_connected_func, message_queue_count_func, enhanced_down
             output = io.StringIO()
             writer = csv.writer(output)
             
-            # Write header
+            # Write header - all fields
             writer.writerow([
-                'Node ID', 'Long Name', 'Short Name', 'MAC Address', 'HW Model', 'Role',
-                'Last Heard', 'SNR', 'RSSI', 'Hop Count', 'Licensed', 'Via MQTT',
-                'Created At', 'Updated At'
+                'Node ID', 'Node Num', 'Long Name', 'Short Name', 'MAC Address', 'HW Model', 'Role',
+                'Public Key', 'Last Heard', 'SNR', 'RSSI', 'Hop Count', 'Hops Away', 'Licensed', 
+                'Favorite', 'Via MQTT', 'Created At', 'Updated At', 'Temperature', 'Humidity', 
+                'Voltage', 'Battery Level', 'Channel Util', 'Air Util TX', 'Uptime Seconds',
+                'Latitude', 'Longitude', 'Altitude', 'Position Time', 'Location Source'
             ])
             
             # Write data rows
