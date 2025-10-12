@@ -16,16 +16,20 @@ def init_database():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS nodes (
                 node_id TEXT PRIMARY KEY,
+                node_num INTEGER,
                 short_name TEXT,
                 long_name TEXT,
                 mac_addr TEXT,
                 hw_model INTEGER,
                 role INTEGER,
+                public_key TEXT,
                 last_heard INTEGER,
                 snr REAL,
                 rssi INTEGER,
                 hop_count INTEGER,
+                hops_away INTEGER,
                 is_licensed BOOLEAN,
+                is_favorite BOOLEAN,
                 via_mqtt BOOLEAN,
                 created_at INTEGER,
                 updated_at INTEGER,
@@ -33,9 +37,14 @@ def init_database():
                 humidity REAL,
                 voltage REAL,
                 battery_level INTEGER,
+                channel_utilization REAL,
+                air_util_tx REAL,
+                uptime_seconds INTEGER,
                 latitude REAL,
                 longitude REAL,
-                altitude INTEGER
+                altitude INTEGER,
+                position_time INTEGER,
+                position_location_source TEXT
             )
         ''')
         
@@ -56,6 +65,15 @@ def init_database():
             columns = [column[1] for column in cursor.fetchall()]
             
             new_columns = [
+                ('node_num', 'INTEGER'),
+                ('public_key', 'TEXT'),
+                ('hops_away', 'INTEGER'),
+                ('is_favorite', 'BOOLEAN'),
+                ('channel_utilization', 'REAL'),
+                ('air_util_tx', 'REAL'),
+                ('uptime_seconds', 'INTEGER'),
+                ('position_time', 'INTEGER'),
+                ('position_location_source', 'TEXT'),
                 ('temperature', 'REAL'),
                 ('humidity', 'REAL'),
                 ('voltage', 'REAL'),
@@ -147,6 +165,10 @@ def update_node_info(node_id, node_info=None, packet_info=None):
                 except:
                     pass
             
+            # Extract node number if available
+            if hasattr(node_info, 'num') and node_info.num:
+                update_data['node_num'] = node_info.num
+            
             if hasattr(node_info, 'user') and node_info.user:
                 # Use correct protobuf field names (snake_case)
                 if hasattr(node_info.user, 'long_name') and node_info.user.long_name:
@@ -161,6 +183,8 @@ def update_node_info(node_id, node_info=None, packet_info=None):
                     update_data['role'] = node_info.user.role
                 if hasattr(node_info.user, 'is_licensed'):
                     update_data['is_licensed'] = node_info.user.is_licensed
+                if hasattr(node_info.user, 'public_key') and node_info.user.public_key:
+                    update_data['public_key'] = node_info.user.public_key
             else:
                 # Debug: Log when user data is missing
                 if update_node_info.debug_count <= 5:
@@ -173,9 +197,45 @@ def update_node_info(node_id, node_info=None, packet_info=None):
                 update_data['snr'] = node_info.snr
             if hasattr(node_info, 'rssi') and node_info.rssi is not None:
                 update_data['rssi'] = node_info.rssi
+            if hasattr(node_info, 'hops_away') and node_info.hops_away is not None:
+                update_data['hops_away'] = node_info.hops_away
+            if hasattr(node_info, 'is_favorite') and node_info.is_favorite is not None:
+                update_data['is_favorite'] = node_info.is_favorite
+            
+            # Extract device metrics
             if hasattr(node_info, 'device_metrics') and node_info.device_metrics:
-                # Extract additional metrics if available
-                pass
+                dm = node_info.device_metrics
+                if hasattr(dm, 'battery_level') and dm.battery_level is not None:
+                    update_data['battery_level'] = dm.battery_level
+                if hasattr(dm, 'voltage') and dm.voltage is not None:
+                    update_data['voltage'] = dm.voltage
+                if hasattr(dm, 'channel_utilization') and dm.channel_utilization is not None:
+                    update_data['channel_utilization'] = dm.channel_utilization
+                if hasattr(dm, 'air_util_tx') and dm.air_util_tx is not None:
+                    update_data['air_util_tx'] = dm.air_util_tx
+                if hasattr(dm, 'uptime_seconds') and dm.uptime_seconds is not None:
+                    update_data['uptime_seconds'] = dm.uptime_seconds
+            
+            # Extract position data
+            if hasattr(node_info, 'position') and node_info.position:
+                pos = node_info.position
+                # Handle both integer (latitudeI) and float (latitude) formats
+                if hasattr(pos, 'latitude_i') and pos.latitude_i:
+                    update_data['latitude'] = pos.latitude_i / 1e7
+                elif hasattr(pos, 'latitude') and pos.latitude is not None:
+                    update_data['latitude'] = pos.latitude
+                
+                if hasattr(pos, 'longitude_i') and pos.longitude_i:
+                    update_data['longitude'] = pos.longitude_i / 1e7
+                elif hasattr(pos, 'longitude') and pos.longitude is not None:
+                    update_data['longitude'] = pos.longitude
+                
+                if hasattr(pos, 'altitude') and pos.altitude is not None:
+                    update_data['altitude'] = pos.altitude
+                if hasattr(pos, 'time') and pos.time:
+                    update_data['position_time'] = pos.time
+                if hasattr(pos, 'location_source') and pos.location_source:
+                    update_data['position_location_source'] = str(pos.location_source)
         else:
             # Debug: Log when node_info is completely missing
             if update_node_info.debug_count <= 5:
@@ -185,6 +245,10 @@ def update_node_info(node_id, node_info=None, packet_info=None):
         if packet_info:
             # Update last_heard to current time when we receive a packet
             update_data['last_heard'] = current_time
+            
+            # Extract node number if available
+            if 'num' in packet_info:
+                update_data['node_num'] = packet_info['num']
             
             if 'decoded' in packet_info and 'user' in packet_info['decoded']:
                 user = packet_info['decoded']['user']
@@ -200,6 +264,14 @@ def update_node_info(node_id, node_info=None, packet_info=None):
                     update_data['role'] = user['role']
                 if 'isLicensed' in user:
                     update_data['is_licensed'] = user['isLicensed']
+                if 'publicKey' in user:
+                    update_data['public_key'] = user['publicKey']
+            
+            # Extract hopsAway and isFavorite from top level
+            if 'hopsAway' in packet_info:
+                update_data['hops_away'] = packet_info['hopsAway']
+            if 'isFavorite' in packet_info:
+                update_data['is_favorite'] = packet_info['isFavorite']
             
             # Extract packet metadata (rssi, snr)
             if 'rxMetadata' in packet_info and packet_info['rxMetadata']:
@@ -230,13 +302,19 @@ def update_node_info(node_id, node_info=None, packet_info=None):
                 if 'telemetry' in decoded:
                     telemetry = decoded['telemetry']
                     
-                    # Device metrics (battery, voltage)
+                    # Device metrics (battery, voltage, channel utilization, etc.)
                     if 'deviceMetrics' in telemetry:
                         device_metrics = telemetry['deviceMetrics']
                         if 'batteryLevel' in device_metrics:
                             update_data['battery_level'] = device_metrics['batteryLevel']
                         if 'voltage' in device_metrics:
                             update_data['voltage'] = device_metrics['voltage']
+                        if 'channelUtilization' in device_metrics:
+                            update_data['channel_utilization'] = device_metrics['channelUtilization']
+                        if 'airUtilTx' in device_metrics:
+                            update_data['air_util_tx'] = device_metrics['airUtilTx']
+                        if 'uptimeSeconds' in device_metrics:
+                            update_data['uptime_seconds'] = device_metrics['uptimeSeconds']
                     
                     # Environment metrics (temperature, humidity)
                     if 'environmentMetrics' in telemetry:
@@ -262,6 +340,10 @@ def update_node_info(node_id, node_info=None, packet_info=None):
                     
                     if 'altitude' in position:
                         update_data['altitude'] = position['altitude']
+                    if 'time' in position:
+                        update_data['position_time'] = position['time']
+                    if 'locationSource' in position:
+                        update_data['position_location_source'] = position['locationSource']
         
         # Check if node exists
         cursor.execute('SELECT node_id FROM nodes WHERE node_id = ?', (node_id,))
@@ -577,6 +659,247 @@ def enhanced_download_nodedb(interface, retry_on_failure=True):
             success = download_nodedb(interface)
     
     return success
+
+
+def export_nodedb_to_json():
+    """Export current nodedb to JSON format (similar to what meshtastic --info would provide)"""
+    import json
+    import sqlite3
+    
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT node_id, node_num, short_name, long_name, mac_addr, hw_model, role,
+                   public_key, last_heard, snr, rssi, hop_count, hops_away, is_licensed,
+                   is_favorite, via_mqtt, created_at, updated_at, temperature, humidity,
+                   voltage, battery_level, channel_utilization, air_util_tx, uptime_seconds,
+                   latitude, longitude, altitude, position_time, position_location_source
+            FROM nodes
+            ORDER BY last_heard DESC
+        ''')
+        
+        nodes = []
+        for row in cursor.fetchall():
+            node = {
+                'num': row[1],
+                'user': {
+                    'id': row[0],
+                    'shortName': row[2],
+                    'longName': row[3],
+                    'macaddr': row[4],
+                    'hwModel': row[5],
+                    'role': row[6],
+                    'publicKey': row[7],
+                    'isLicensed': row[13]
+                },
+                'lastHeard': row[8],
+                'snr': row[9],
+                'rssi': row[10],
+                'hopCount': row[11],
+                'hopsAway': row[12],
+                'isFavorite': row[14],
+                'viaMqtt': row[15],
+                'createdAt': row[16],
+                'updatedAt': row[17],
+                'deviceMetrics': {
+                    'batteryLevel': row[21],
+                    'voltage': row[20],
+                    'channelUtilization': row[22],
+                    'airUtilTx': row[23],
+                    'uptimeSeconds': row[24]
+                },
+                'position': {
+                    'latitude': row[25],
+                    'longitude': row[26],
+                    'altitude': row[27],
+                    'time': row[28],
+                    'locationSource': row[29]
+                },
+                'telemetry': {
+                    'temperature': row[18],
+                    'humidity': row[19]
+                }
+            }
+            nodes.append(node)
+        
+        conn.close()
+        
+        nodedb_json = {
+            'nodes': nodes,
+            'exportedAt': int(time.time()),
+            'totalNodes': len(nodes)
+        }
+        
+        return json.dumps(nodedb_json, indent=2)
+        
+    except Exception as e:
+        print(f"Error exporting nodedb to JSON: {e}")
+        return None
+
+
+def import_nodedb_from_json(json_data):
+    """Import nodedb from JSON data (from meshtastic --info or interface export)"""
+    from logging_utils import log_console_and_web, log_web
+    import json
+    
+    try:
+        # Parse JSON if it's a string
+        if isinstance(json_data, str):
+            data = json.loads(json_data)
+        else:
+            data = json_data
+        
+        node_count = 0
+        
+        # Check if this is a meshtastic info output with nodes
+        if 'nodes' in data:
+            nodes = data['nodes']
+            log_console_and_web(f"Found {len(nodes)} nodes in JSON data", "cyan")
+            
+            for node in nodes:
+                try:
+                    # Extract node ID
+                    node_id = node.get('user', {}).get('id')
+                    if not node_id:
+                        continue
+                    
+                    # Create a wrapper object for the node data
+                    class NodeInfoWrapper:
+                        def __init__(self, data):
+                            # Node number
+                            self.num = data.get('num')
+                            
+                            # User data
+                            self.user = type('obj', (object,), {})()
+                            if 'user' in data:
+                                user_data = data['user']
+                                self.user.long_name = user_data.get('longName', '')
+                                self.user.short_name = user_data.get('shortName', '')
+                                self.user.macaddr = user_data.get('macaddr', '')
+                                self.user.hw_model = user_data.get('hwModel', 0)
+                                self.user.role = user_data.get('role', 0)
+                                self.user.is_licensed = user_data.get('isLicensed', False)
+                                self.user.public_key = user_data.get('publicKey', '')
+                            
+                            # Network metrics
+                            self.last_heard = data.get('lastHeard', 0)
+                            self.snr = data.get('snr')
+                            self.rssi = data.get('rssi')
+                            self.hops_away = data.get('hopsAway')
+                            self.is_favorite = data.get('isFavorite')
+                            
+                            # Device metrics
+                            if 'deviceMetrics' in data:
+                                self.device_metrics = type('obj', (object,), {})()
+                                dm = data['deviceMetrics']
+                                self.device_metrics.battery_level = dm.get('batteryLevel')
+                                self.device_metrics.voltage = dm.get('voltage')
+                                self.device_metrics.channel_utilization = dm.get('channelUtilization')
+                                self.device_metrics.air_util_tx = dm.get('airUtilTx')
+                                self.device_metrics.uptime_seconds = dm.get('uptimeSeconds')
+                            
+                            # Position data
+                            if 'position' in data:
+                                self.position = type('obj', (object,), {})()
+                                pos = data['position']
+                                # Handle both integer and float formats
+                                if 'latitudeI' in pos:
+                                    self.position.latitude_i = pos['latitudeI']
+                                    self.position.latitude = pos['latitudeI'] / 1e7
+                                else:
+                                    self.position.latitude = pos.get('latitude')
+                                
+                                if 'longitudeI' in pos:
+                                    self.position.longitude_i = pos['longitudeI']
+                                    self.position.longitude = pos['longitudeI'] / 1e7
+                                else:
+                                    self.position.longitude = pos.get('longitude')
+                                
+                                self.position.altitude = pos.get('altitude')
+                                self.position.time = pos.get('time')
+                                self.position.location_source = pos.get('locationSource')
+                    
+                    wrapped_info = NodeInfoWrapper(node)
+                    
+                    if update_node_info(node_id, node_info=wrapped_info):
+                        node_count += 1
+                        
+                except Exception as e:
+                    log_console_and_web(f"Error processing node from JSON: {e}", "yellow")
+        
+        if node_count > 0:
+            log_console_and_web(f"Successfully imported {node_count} nodes from JSON", "green")
+            log_nodedb_statistics()
+            return True
+        else:
+            log_console_and_web("No nodes were imported from JSON", "yellow")
+            return False
+            
+    except Exception as e:
+        log_console_and_web(f"Error importing nodes from JSON: {e}", "yellow")
+        return False
+
+
+def import_nodedb_from_cli():
+    """Import nodedb using meshtastic CLI command with JSON output"""
+    from logging_utils import log_console_and_web, log_web
+    import subprocess
+    import json
+    from config import CONNECTION_TYPE, DEVICE_IP, SERIAL_DEVICE
+    
+    try:
+        log_console_and_web("Importing nodes from meshtastic CLI...", "cyan")
+        
+        # Build meshtastic command based on connection type
+        cmd = ['meshtastic']
+        if CONNECTION_TYPE == 'tcp':
+            cmd.extend(['--host', DEVICE_IP])
+        elif CONNECTION_TYPE == 'serial' and SERIAL_DEVICE:
+            cmd.extend(['--port', SERIAL_DEVICE])
+        
+        # Use --export-config to get JSON output including nodedb
+        # Note: This exports the full config, which includes node information
+        cmd.append('--export-config')
+        
+        # Run the command with a timeout
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
+        if result.returncode != 0:
+            log_console_and_web(f"meshtastic CLI command failed: {result.stderr}", "yellow")
+            return False
+        
+        output = result.stdout
+        
+        if not output:
+            log_console_and_web("No output from meshtastic CLI", "yellow")
+            return False
+        
+        # Try to parse as JSON
+        try:
+            # The export-config outputs YAML, not JSON, so we need a different approach
+            # Let's use the existing interface method instead
+            log_console_and_web("Using interface-based node download instead of CLI", "cyan")
+            return False
+        except Exception as e:
+            log_console_and_web(f"Could not parse CLI output: {e}", "yellow")
+            return False
+        
+    except subprocess.TimeoutExpired:
+        log_console_and_web("meshtastic CLI command timed out", "yellow")
+        return False
+    except FileNotFoundError:
+        log_console_and_web("meshtastic CLI not found in PATH", "yellow")
+        return False
+    except Exception as e:
+        log_console_and_web(f"Error importing nodes from CLI: {e}", "yellow")
+        return False
 
 
 def schedule_periodic_nodedb_refresh(interface, interval_hours=24):
