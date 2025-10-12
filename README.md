@@ -12,7 +12,8 @@ The bot now maintains a SQLite database (`nodedb.sqlite`) to store information a
 - **Enhanced nodedb download**: Downloads the complete node database using multiple data sources for maximum coverage
 - **Dual-source processing**: Extracts nodes from both `interface.nodes` (by ID) and `interface.nodesByNum` (by number)
 - **Comprehensive data extraction**: Captures all available node information including names, hardware, role, licensing, and network metrics
-- **Automatic retry & refresh**: Retries failed downloads and periodically refreshes every 6 hours
+- **Automatic retry & refresh**: Retries failed downloads and periodically refreshes every 12 hours
+- **JSON Import/Export**: Export nodedb to JSON format (similar to `meshtastic --info` output) and import from JSON
 - **Real-time statistics**: Monitors database health with completion rates and data quality metrics
 - **Real-time updates**: Listens for `NODEINFO_APP`, `NEIGHBORINFO_APP`, `TELEMETRY_APP`, and `POSITION_APP` packets to keep node information current
 - **Smart name resolution**: Uses stored long/short names from the database instead of displaying raw radio IDs
@@ -50,7 +51,8 @@ To validate the implementation, run: `python3 validate_traceroute.py`
 
 - **Enhanced NodeDB Download**: Comprehensive node data extraction from multiple sources with retry logic
 - **Dual Source Node Processing**: Extracts nodes from both `interface.nodes` and `interface.nodesByNum` for maximum coverage
-- **Periodic NodeDB Refresh**: Automatic refresh every 6 hours to catch new nodes and updates
+- **Periodic NodeDB Refresh**: Automatic refresh every 12 hours to catch new nodes and updates
+- **JSON Import/Export**: Export nodedb to JSON format and import from JSON (API endpoints for integration)
 - **Advanced Debugging**: Detailed logging of node data structures and extraction process
 - **Database Statistics**: Real-time monitoring of node database health and completion rates
 - **Robust Error Handling**: Individual node failures don't stop entire nodedb download
@@ -91,8 +93,10 @@ Set these environment variables:
 - `GET /health`: Health check returning `{"connected": true/false, "queued": N}`
 - `GET /nodes`: Node database browser with search and pagination
 - `GET /nodes/export`: Export node database as CSV
+- `GET /nodes/export?format=json`: Export node database as JSON (similar to `meshtastic --info` output)
 - `GET /nodedb/stats`: NodeDB statistics and health metrics
 - `POST /nodedb/refresh`: Manually trigger nodedb refresh (requires radio connection)
+- `POST /nodedb/import`: Import nodes from JSON data (for bulk imports or migrations)
 
 ## Usage
 

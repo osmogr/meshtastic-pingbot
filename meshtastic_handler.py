@@ -596,8 +596,8 @@ def monitor_connection():
                             enhanced_download_nodedb(interface)
                             # Clean up old nodes (older than 30 days)
                             cleanup_old_nodes(30)
-                            # Schedule periodic nodedb refresh (every 6 hours)
-                            schedule_periodic_nodedb_refresh(interface, 6)
+                            # Schedule periodic nodedb refresh (every 12 hours)
+                            schedule_periodic_nodedb_refresh(interface, 12)
                         except Exception as e:
                             log_console_and_web(f"Failed to download nodedb: {e}", "yellow")
                             log_web(f"Failed to download nodedb: {e}", "yellow")

@@ -483,7 +483,9 @@ def setup_routes(app, is_connected_func, message_queue_count_func, enhanced_down
 
     @app.route("/nodes/export")
     def export_nodes():
-        """Export nodes data as CSV"""
+        """Export nodes data as CSV or JSON"""
+        format_type = request.args.get('format', 'csv').lower()
+        
         try:
             # Get same parameters as nodes route for consistency
             sort_by = request.args.get('sort', 'updated_at')
@@ -497,6 +499,20 @@ def setup_routes(app, is_connected_func, message_queue_count_func, enhanced_down
             if sort_order not in ['asc', 'desc']:
                 sort_order = 'desc'
             
+            # Export as JSON if requested
+            if format_type == 'json':
+                from database import export_nodedb_to_json
+                json_data = export_nodedb_to_json()
+                if json_data:
+                    return Response(
+                        json_data,
+                        mimetype='application/json',
+                        headers={'Content-Disposition': 'attachment; filename=meshtastic_nodes.json'}
+                    )
+                else:
+                    return jsonify({'error': 'Failed to export nodedb'}), 500
+            
+            # Export as CSV (default)
             conn = sqlite3.connect(DATABASE_PATH)
             cursor = conn.cursor()
             
@@ -615,6 +631,27 @@ Connected: {stats['connected']}"""
                 
         except Exception as e:
             return jsonify({'error': f'NodeDB refresh error: {str(e)}'}), 500
+
+    @app.route("/nodedb/import", methods=['POST'])
+    def nodedb_import():
+        """Import nodes from JSON data (similar to meshtastic --info json output)"""
+        try:
+            # Check if JSON data was provided
+            if not request.json:
+                return jsonify({'error': 'No JSON data provided'}), 400
+            
+            from database import import_nodedb_from_json
+            
+            # Import the nodes
+            success = import_nodedb_from_json(request.json)
+            
+            if success:
+                return jsonify({'message': 'NodeDB import completed successfully'})
+            else:
+                return jsonify({'error': 'NodeDB import failed'}), 500
+                
+        except Exception as e:
+            return jsonify({'error': f'NodeDB import error: {str(e)}'}), 500
 
     @app.after_request
     def add_security_headers(response):

@@ -579,6 +579,196 @@ def enhanced_download_nodedb(interface, retry_on_failure=True):
     return success
 
 
+def export_nodedb_to_json():
+    """Export current nodedb to JSON format (similar to what meshtastic --info would provide)"""
+    import json
+    import sqlite3
+    
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT node_id, short_name, long_name, mac_addr, hw_model, role,
+                   last_heard, snr, rssi, hop_count, is_licensed, via_mqtt,
+                   created_at, updated_at, temperature, humidity, voltage,
+                   battery_level, latitude, longitude, altitude
+            FROM nodes
+            ORDER BY last_heard DESC
+        ''')
+        
+        nodes = []
+        for row in cursor.fetchall():
+            node = {
+                'user': {
+                    'id': row[0],
+                    'shortName': row[1],
+                    'longName': row[2],
+                    'macaddr': row[3],
+                    'hwModel': row[4],
+                    'role': row[5],
+                    'isLicensed': row[10]
+                },
+                'lastHeard': row[6],
+                'snr': row[7],
+                'rssi': row[8],
+                'hopCount': row[9],
+                'viaMqtt': row[11],
+                'createdAt': row[12],
+                'updatedAt': row[13],
+                'telemetry': {
+                    'temperature': row[14],
+                    'humidity': row[15],
+                    'voltage': row[16],
+                    'batteryLevel': row[17]
+                },
+                'position': {
+                    'latitude': row[18],
+                    'longitude': row[19],
+                    'altitude': row[20]
+                }
+            }
+            nodes.append(node)
+        
+        conn.close()
+        
+        nodedb_json = {
+            'nodes': nodes,
+            'exportedAt': int(time.time()),
+            'totalNodes': len(nodes)
+        }
+        
+        return json.dumps(nodedb_json, indent=2)
+        
+    except Exception as e:
+        print(f"Error exporting nodedb to JSON: {e}")
+        return None
+
+
+def import_nodedb_from_json(json_data):
+    """Import nodedb from JSON data (from meshtastic --info or interface export)"""
+    from logging_utils import log_console_and_web, log_web
+    import json
+    
+    try:
+        # Parse JSON if it's a string
+        if isinstance(json_data, str):
+            data = json.loads(json_data)
+        else:
+            data = json_data
+        
+        node_count = 0
+        
+        # Check if this is a meshtastic info output with nodes
+        if 'nodes' in data:
+            nodes = data['nodes']
+            log_console_and_web(f"Found {len(nodes)} nodes in JSON data", "cyan")
+            
+            for node in nodes:
+                try:
+                    # Extract node ID
+                    node_id = node.get('user', {}).get('id')
+                    if not node_id:
+                        continue
+                    
+                    # Create a wrapper object for the node data
+                    class NodeInfoWrapper:
+                        def __init__(self, data):
+                            self.user = type('obj', (object,), {})()
+                            if 'user' in data:
+                                user_data = data['user']
+                                self.user.long_name = user_data.get('longName', '')
+                                self.user.short_name = user_data.get('shortName', '')
+                                self.user.macaddr = user_data.get('macaddr', '')
+                                self.user.hw_model = user_data.get('hwModel', 0)
+                                self.user.role = user_data.get('role', 0)
+                                self.user.is_licensed = user_data.get('isLicensed', False)
+                            
+                            self.last_heard = data.get('lastHeard', 0)
+                            self.snr = data.get('snr')
+                            self.rssi = data.get('rssi')
+                    
+                    wrapped_info = NodeInfoWrapper(node)
+                    
+                    if update_node_info(node_id, node_info=wrapped_info):
+                        node_count += 1
+                        
+                except Exception as e:
+                    log_console_and_web(f"Error processing node from JSON: {e}", "yellow")
+        
+        if node_count > 0:
+            log_console_and_web(f"Successfully imported {node_count} nodes from JSON", "green")
+            log_nodedb_statistics()
+            return True
+        else:
+            log_console_and_web("No nodes were imported from JSON", "yellow")
+            return False
+            
+    except Exception as e:
+        log_console_and_web(f"Error importing nodes from JSON: {e}", "yellow")
+        return False
+
+
+def import_nodedb_from_cli():
+    """Import nodedb using meshtastic CLI command with JSON output"""
+    from logging_utils import log_console_and_web, log_web
+    import subprocess
+    import json
+    from config import CONNECTION_TYPE, DEVICE_IP, SERIAL_DEVICE
+    
+    try:
+        log_console_and_web("Importing nodes from meshtastic CLI...", "cyan")
+        
+        # Build meshtastic command based on connection type
+        cmd = ['meshtastic']
+        if CONNECTION_TYPE == 'tcp':
+            cmd.extend(['--host', DEVICE_IP])
+        elif CONNECTION_TYPE == 'serial' and SERIAL_DEVICE:
+            cmd.extend(['--port', SERIAL_DEVICE])
+        
+        # Use --export-config to get JSON output including nodedb
+        # Note: This exports the full config, which includes node information
+        cmd.append('--export-config')
+        
+        # Run the command with a timeout
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
+        if result.returncode != 0:
+            log_console_and_web(f"meshtastic CLI command failed: {result.stderr}", "yellow")
+            return False
+        
+        output = result.stdout
+        
+        if not output:
+            log_console_and_web("No output from meshtastic CLI", "yellow")
+            return False
+        
+        # Try to parse as JSON
+        try:
+            # The export-config outputs YAML, not JSON, so we need a different approach
+            # Let's use the existing interface method instead
+            log_console_and_web("Using interface-based node download instead of CLI", "cyan")
+            return False
+        except Exception as e:
+            log_console_and_web(f"Could not parse CLI output: {e}", "yellow")
+            return False
+        
+    except subprocess.TimeoutExpired:
+        log_console_and_web("meshtastic CLI command timed out", "yellow")
+        return False
+    except FileNotFoundError:
+        log_console_and_web("meshtastic CLI not found in PATH", "yellow")
+        return False
+    except Exception as e:
+        log_console_and_web(f"Error importing nodes from CLI: {e}", "yellow")
+        return False
+
+
 def schedule_periodic_nodedb_refresh(interface, interval_hours=24):
     """Schedule periodic nodedb refresh to ensure we have the latest data"""
     import threading
