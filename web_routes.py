@@ -575,7 +575,7 @@ def setup_routes(app, is_connected_func, message_queue_count_func, enhanced_down
     def nodes():
         """Database browser for nodes"""
         # Get query parameters for filtering and sorting
-        sort_by = request.args.get('sort', 'updated_at')
+        sort_by = request.args.get('sort', 'last_heard')
         sort_order = request.args.get('order', 'desc')
         search = request.args.get('search', '')
         page = int(request.args.get('page', 1))
