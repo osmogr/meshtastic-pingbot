@@ -11,9 +11,9 @@ The bot now maintains a SQLite database (`nodedb.sqlite`) to store information a
 
 - **Enhanced nodedb download**: Downloads the complete node database using multiple data sources for maximum coverage
 - **Dual-source processing**: Extracts nodes from both `interface.nodes` (by ID) and `interface.nodesByNum` (by number)
-- **Comprehensive data extraction**: Captures all available node information including names, hardware, role, licensing, and network metrics
+- **Comprehensive data extraction**: Captures all available node information including names, hardware, role, licensing, network metrics, device metrics (battery, voltage, channel utilization, air utilization, uptime), position data (GPS coordinates, altitude, time, location source), and metadata (public keys, favorite status, hops away)
 - **Automatic retry & refresh**: Retries failed downloads and periodically refreshes every 12 hours
-- **JSON Import/Export**: Export nodedb to JSON format (similar to `meshtastic --info` output) and import from JSON
+- **JSON Import/Export**: Export nodedb to JSON format (complete `meshtastic --info` format) and import from JSON
 - **Real-time statistics**: Monitors database health with completion rates and data quality metrics
 - **Real-time updates**: Listens for `NODEINFO_APP`, `NEIGHBORINFO_APP`, `TELEMETRY_APP`, and `POSITION_APP` packets to keep node information current
 - **Smart name resolution**: Uses stored long/short names from the database instead of displaying raw radio IDs

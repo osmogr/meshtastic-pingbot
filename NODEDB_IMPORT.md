@@ -23,38 +23,49 @@ When the bot connects to a Meshtastic radio:
 
 ### JSON Structure
 
-The JSON format used for import/export follows this structure:
+The JSON format used for import/export follows this structure and includes all fields from `meshtastic --info` output:
 
 ```json
 {
   "nodes": [
     {
+      "num": 142315740,
       "user": {
         "id": "!12345678",
         "shortName": "NODE1",
         "longName": "My Node 1",
         "macaddr": "aa:bb:cc:dd:ee:ff",
-        "hwModel": 1,
-        "role": 0,
+        "hwModel": "RAK11200",
+        "role": "CLIENT",
+        "publicKey": "base64encodedkey...",
         "isLicensed": false
       },
       "lastHeard": 1234567890,
       "snr": 5.5,
       "rssi": -80,
       "hopCount": 2,
+      "hopsAway": 0,
+      "isFavorite": true,
       "viaMqtt": false,
       "createdAt": 1234567890,
       "updatedAt": 1234567890,
-      "telemetry": {
-        "temperature": 25.5,
-        "humidity": 60.0,
+      "deviceMetrics": {
+        "batteryLevel": 85,
         "voltage": 4.2,
-        "batteryLevel": 85
+        "channelUtilization": 11.4,
+        "airUtilTx": 1.48,
+        "uptimeSeconds": 16634
       },
       "position": {
         "latitude": 37.7749,
         "longitude": -122.4194,
-        "altitude": 100
+        "altitude": 100,
+        "time": 1234567890,
+        "locationSource": "LOC_INTERNAL"
+      },
+      "telemetry": {
+        "temperature": 25.5,
+        "humidity": 60.0
       }
     }
   ],
@@ -203,7 +214,53 @@ The periodic refresh interval is set to **12 hours** by default. This is configu
 schedule_periodic_nodedb_refresh(interface, 12)  # 12 hours
 ```
 
-## Troubleshooting
+## Database Schema
+
+The bot stores comprehensive node information in a SQLite database with the following fields:
+
+**Core Node Information:**
+- `node_id` (TEXT) - Unique node identifier (e.g., "!12345678")
+- `node_num` (INTEGER) - Numeric node ID
+- `short_name` (TEXT) - Short display name
+- `long_name` (TEXT) - Full display name
+- `mac_addr` (TEXT) - MAC address
+- `hw_model` (INTEGER) - Hardware model
+- `role` (INTEGER) - Node role (CLIENT, ROUTER, etc.)
+- `public_key` (TEXT) - User's public key
+
+**Network Metrics:**
+- `last_heard` (INTEGER) - Last time node was heard (Unix timestamp)
+- `snr` (REAL) - Signal-to-noise ratio
+- `rssi` (INTEGER) - Received signal strength indicator
+- `hop_count` (INTEGER) - Number of hops in route
+- `hops_away` (INTEGER) - Number of hops from local node
+- `is_licensed` (BOOLEAN) - Whether user is licensed
+- `is_favorite` (BOOLEAN) - Whether node is marked as favorite
+- `via_mqtt` (BOOLEAN) - Whether received via MQTT
+
+**Device Metrics:**
+- `battery_level` (INTEGER) - Battery percentage (0-100)
+- `voltage` (REAL) - Battery voltage
+- `channel_utilization` (REAL) - Channel utilization percentage
+- `air_util_tx` (REAL) - Air utilization TX percentage
+- `uptime_seconds` (INTEGER) - Device uptime in seconds
+
+**Environment Metrics:**
+- `temperature` (REAL) - Temperature reading
+- `humidity` (REAL) - Humidity percentage
+
+**Position Data:**
+- `latitude` (REAL) - GPS latitude
+- `longitude` (REAL) - GPS longitude
+- `altitude` (INTEGER) - Altitude in meters
+- `position_time` (INTEGER) - Timestamp of position data
+- `position_location_source` (TEXT) - Source of location (e.g., "LOC_INTERNAL")
+
+**Metadata:**
+- `created_at` (INTEGER) - When node was first seen
+- `updated_at` (INTEGER) - Last update timestamp
+
+All fields from `meshtastic --info` JSON output are supported.
 
 ### Import Fails
 
