@@ -31,6 +31,23 @@ The bot now maintains a SQLite database (`nodedb.sqlite`) to store information a
 - `help`, `/help` - Shows available triggers and commands
 - `about`, `/about` - Shows information about the bot
 
+### Scheduled Greetings
+
+The bot can automatically send greetings to the mesh network based on sunrise and sunset times:
+
+- **Good Morning**: Sent 1 hour after sunrise
+- **Good Evening**: Sent 30 minutes after sunset
+
+These times are calculated daily based on your configured location and timezone. The greetings are broadcast to all nodes on the mesh network.
+
+**Configuration:**
+- `LATITUDE`: Your location's latitude (default: 37.7749 - San Francisco)
+- `LONGITUDE`: Your location's longitude (default: -122.4194 - San Francisco)
+- `TIMEZONE`: Your timezone (default: "America/Los_Angeles")
+- `ENABLE_SCHEDULED_GREETINGS`: Enable/disable scheduled greetings (default: "true")
+
+The scheduler automatically recalculates sunrise/sunset times each day and sends greetings at the appropriate times.
+
 ### Traceroute Rate Limiting
 
 The traceroute feature implements sophisticated queuing and rate limiting to respect the Meshtastic firmware's constraint of one traceroute every 30 seconds:
@@ -46,6 +63,7 @@ To validate the implementation, run: `python3 validate_traceroute.py`
 
 ### Recent Improvements
 
+- **Scheduled Greetings**: Automatic "Good Morning" and "Good Evening" messages based on sunrise/sunset times
 - **Traceroute Rate Limiting**: Comprehensive queuing system with 30-second rate limiting to comply with firmware constraints
 - **Enhanced Documentation**: Detailed implementation guides and validation scripts
 
@@ -87,6 +105,12 @@ Set these environment variables:
 ### Other Settings 
 - `DATABASE_PATH`: Path to SQLite database file (default: "nodedb.sqlite")
 - `DISCORD_WEBHOOK_URL`: Discord webhook URL for notifications (optional)
+
+### Scheduled Greetings Settings
+- `LATITUDE`: Your location's latitude for sunrise/sunset calculations (default: 37.7749 - San Francisco)
+- `LONGITUDE`: Your location's longitude for sunrise/sunset calculations (default: -122.4194 - San Francisco)
+- `TIMEZONE`: Your timezone for sunrise/sunset calculations (default: "America/Los_Angeles")
+- `ENABLE_SCHEDULED_GREETINGS`: Enable or disable scheduled greetings - "true" or "false" (default: "true")
 
 ## API Endpoints
 - `GET /`: Web interface showing live logs

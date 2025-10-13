@@ -17,6 +17,7 @@ from config import MAX_LOG_LINES
 from database import init_database, enhanced_download_nodedb
 from logging_utils import log_console, log_web, set_socketio
 from traceroute import start_traceroute_worker, stop_traceroute_worker
+from scheduled_messages import start_scheduler, stop_scheduler
 from meshtastic_handler import (
     connect_radio, setup_exception_handlers, stop_connection,
     get_connection_status
@@ -82,6 +83,9 @@ def main():
         # Connect to radio and start monitoring
         interface = connect_radio()
         
+        # Start scheduled greetings worker
+        start_scheduler(interface)
+        
         # Start web server
         log_console("Starting web server...", "green", True)
         log_web("Starting web server...", "green", True)
@@ -89,14 +93,17 @@ def main():
         
     except KeyboardInterrupt:
         log_console("Shutting down...", "yellow")
+        stop_scheduler()
         stop_traceroute_worker()
         stop_connection()
     except Exception as e:
         log_console(f"Fatal error: {e}", "red")
+        stop_scheduler()
         stop_traceroute_worker()
         stop_connection()
     finally:
         # Clean shutdown
+        stop_scheduler()
         stop_traceroute_worker()
         stop_connection()
 

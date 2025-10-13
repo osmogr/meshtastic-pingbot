@@ -43,3 +43,16 @@ MAX_QUEUE_PER_USER = 2  # Maximum queued traceroutes per user
 # --- Triggers and commands ---
 TRIGGERS = ["ping", "hello", "test"]  # Basic triggers - traceroute handled separately
 DM_COMMANDS = ["help", "/help", "about", "/about"]
+
+# --- Scheduled messages ---
+# Location for sunrise/sunset calculations (default: San Francisco, CA)
+LATITUDE = float(os.environ.get("LATITUDE", "37.7749"))
+LONGITUDE = float(os.environ.get("LONGITUDE", "-122.4194"))
+TIMEZONE = os.environ.get("TIMEZONE", "America/Los_Angeles")
+
+# Enable/disable scheduled greetings
+ENABLE_SCHEDULED_GREETINGS = os.environ.get("ENABLE_SCHEDULED_GREETINGS", "true").lower() == "true"
+
+# Greeting message configuration
+GOOD_MORNING_OFFSET_HOURS = 1  # Hours after sunrise
+GOOD_EVENING_OFFSET_MINUTES = 30  # Minutes after sunset
